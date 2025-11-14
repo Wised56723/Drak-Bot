@@ -18,6 +18,7 @@
         "resolveJsonModule": true,
         "importHelpers": true,
         "experimentalDecorators": true,
+        "allowJs": true, // <--- ADICIONE ESTA LINHA
     },
     "include": ["src/**/*"],
     "exclude": ["node_modules", "**/*.spec.ts"]
