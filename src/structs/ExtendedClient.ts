@@ -1,7 +1,8 @@
 import { 
     Client, Partials, IntentsBitField, BitFieldResolvable, 
     GatewayIntentsString, Collection, Interaction, REST, Routes, 
-    ApplicationCommandData
+    ApplicationCommandData,
+    Events // NOVO: Vamos usar o Events.ClientReady que corrigimos antes
 } from "discord.js";
 import dotenv from "dotenv";
 import { CommandType, ComponentsButton, ComponentsModal, ComponentsSelect } from "./types/Command";
@@ -32,10 +33,7 @@ export class ExtendedClient extends Client {
     }
 
     private async registerCommands() {
-        // --- MODIFICAÇÃO AQUI ---
-        // Precisamos que o JSON lide com BigInt
         (BigInt.prototype as any).toJSON = function() { return this.toString(); };
-        // --- FIM DA MODIFICAÇÃO ---
 
         const commands: ApplicationCommandData[] = [];
         const commandFiles = await glob(path.join(__dirname, "..", "commands", "**", "*.{ts,js}"));
@@ -74,7 +72,9 @@ export class ExtendedClient extends Client {
     }
 
     private registerListeners() {
-        this.on("interactionCreate", (interaction: Interaction) => {
+        // --- MODIFICAÇÃO AQUI ---
+        // Adicionamos o 'this' (o client) às chamadas dos botões e menus.
+        this.on(Events.InteractionCreate, (interaction: Interaction) => {
             
             if (interaction.isChatInputCommand()) { 
                 const command = this.commands.get(interaction.commandName);
@@ -104,13 +104,14 @@ export class ExtendedClient extends Client {
             
             else if (interaction.isButton()) {
                  const button = this.buttons.get(interaction.customId);
-                 if (button) button(interaction);
+                 if (button) button(interaction, this); // Passa o 'this'
             }
             else if (interaction.isStringSelectMenu()) {
                  const select = this.selects.get(interaction.customId);
-                 if (select) select(interaction);
+                 if (select) select(interaction, this); // Passa o 'this'
             }
         });
+        // --- FIM DA MODIFICAÇÃO ---
     }
     
     public async start() {

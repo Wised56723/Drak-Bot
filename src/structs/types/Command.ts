@@ -18,11 +18,12 @@ interface CommandProps {
     options: Omit<CommandInteractionOptionResolver<CacheType>, "getMessage" | "getFocused"> 
 }
 
-export type ComponentsButton = Collection<string, (Interaction: ButtonInteraction) => any>;
+// --- MODIFICAÇÕES AQUI ---
+// Adicionamos o 'client: ExtendedClient' aos botões e menus, tal como fizemos com os modais.
+export type ComponentsButton = Collection<string, (Interaction: ButtonInteraction, client: ExtendedClient) => any>;
+export type ComponentsSelect = Collection<string, (Interaction: StringSelectMenuInteraction, client: ExtendedClient) => any>;
+// --- FIM DAS MODIFICAÇÕES ---
 
-export type ComponentsSelect = Collection<string, (Interaction: StringSelectMenuInteraction) => any>;
-
-// MODIFICADO: Agora passa o client para o handler do modal
 export type ComponentsModal = Collection<string, (interaction: ModalSubmitInteraction, client: ExtendedClient) => any>;
 
 interface CommandComponents {

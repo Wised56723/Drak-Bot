@@ -8,8 +8,9 @@ import { Command } from "../../structs/types/Command";
 import db = require("../../database.js");
 import { RunResult } from "sqlite3";
 import { config } from "../..";
+import { PIX } from "gpix/dist"; 
 
-// Define a interface para o objeto Rifa (mínimo)
+// ... (interfaces Rifa, Usuario e função countBilhetesReservados não mudam) ...
 interface Rifa {
     id_rifa: number;
     total_bilhetes: number;
@@ -17,14 +18,10 @@ interface Rifa {
     preco_bilhete: number;
     nome_premio: string;
 }
-
-// Define a interface para o Usuário
 interface Usuario {
     id_discord: string;
     nome: string;
 }
-
-// Função para contar bilhetes (vendidos + pendentes)
 function countBilhetesReservados(rifaId: number): Promise<number> {
      return new Promise((resolve, reject) => {
         const sql = `
@@ -39,6 +36,7 @@ function countBilhetesReservados(rifaId: number): Promise<number> {
         });
     });
 }
+
 
 export default new Command({
     name: "comprar",
@@ -70,7 +68,7 @@ export default new Command({
             });
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ ephemeral: false });
         
         const id_discord = interaction.user.id;
         const id_rifa = options.getInteger("rifa", true);
@@ -81,6 +79,7 @@ export default new Command({
         }
 
         try {
+            // ... (verificações de usuário e rifa não mudam) ...
             const usuario: Usuario = await new Promise((resolve, reject) => {
                 db.get("SELECT * FROM Usuarios WHERE id_discord = ?", 
                     [id_discord], 
@@ -103,12 +102,9 @@ export default new Command({
                 return interaction.editReply(`A rifa com ID #${id_rifa} não foi encontrada.`);
             }
 
-            // --- LÓGICA DE STATUS MODIFICADA ---
-            // Permite comprar se estiver 'ativa' OU 'aguardando_sorteio'
             if (rifa.status !== 'ativa' && rifa.status !== 'aguardando_sorteio') {
                 return interaction.editReply(`A rifa "${rifa.nome_premio}" não está aceitando compras no momento (Status: ${rifa.status}).`);
             }
-            // --- FIM DA MODIFICAÇÃO ---
 
             const reservados = await countBilhetesReservados(id_rifa);
             const disponiveis = rifa.total_bilhetes - reservados;
@@ -121,6 +117,7 @@ export default new Command({
                 );
             }
 
+            // ... (inserção no DB não muda) ...
             const data_compra = new Date().toISOString();
             const sql = `INSERT INTO Compras (id_rifa_fk, id_usuario_fk, data_compra, quantidade, status) 
                          VALUES (?, ?, ?, ?, 'em_analise')`;
@@ -133,26 +130,51 @@ export default new Command({
                 });
             });
 
-            const totalPreco = (quantidade * rifa.preco_bilhete)
-                .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            // ... (cálculo do pix não muda) ...
+            const totalPreco = (quantidade * rifa.preco_bilhete);
+            const totalPrecoString = totalPreco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            
+            let pixCode = "";
+            try {
+                const transactionId = String(newCompraId);
+                const safeTxid = transactionId.replace(/[^a-zA-Z0-9]/g, "").substring(0, 25);
+                
+                const pix = PIX.static()
+                    .setReceiverName(config.pixMerchantName)
+                    .setReceiverCity(config.pixMerchantCity)
+                    .setKey(config.pixKey)
+                    .setAmount(totalPreco)
+                    .setIdentificator(safeTxid); 
+                
+                pixCode = pix.getBRCode();
+
+            } catch (pixError: any) {
+                console.error("Erro ao gerar BRCode (Objeto Completo):", pixError); 
+                pixCode = "Erro ao gerar código. Use a chave manual.";
+            }
 
             const replyEmbed = new EmbedBuilder()
                 .setTitle("✅ Reserva de Bilhetes Realizada!")
                 .setDescription(
-                    `Sua reserva para a rifa **${rifa.nome_premio}** foi registrada com sucesso.\n` +
-                    `**ID da sua Compra:** \`${newCompraId}\` (guarde este número!)\n\n` +
-                    `Para confirmar, realize o pagamento e aguarde a aprovação de um administrador.`
+                    `Sua reserva para a rifa **${rifa.nome_premio}** foi registrada.\n` +
+                    `**ID da sua Compra:** \`${newCompraId}\`\n\n` +
+                    `Para confirmar, pague o valor abaixo:`
                 )
                 .addFields(
-                    { name: "Bilhetes Reservados", value: `${quantidade}`, inline: true },
-                    { name: "Valor Total", value: `**${totalPreco}**`, inline: true },
-                    { name: "Instruções de Pagamento", value: `\`\`\`${config.pixKey}\`\`\`` }
+                    { name: "Valor Total", value: `**${totalPrecoString}**`, inline: false },
+                    
+                    // --- INÍCIO DA MODIFICAÇÃO (Remoção do ```) ---
+                    { name: "Pix Copia e Cola (com valor e ID)", value: `${pixCode}`, inline: false },
+                    // --- FIM DA MODIFICAÇÃO ---
+
+                    { name: "Chave Pix Manual (sem valor)", value: `${config.pixKey}`, inline: false }
                 )
                 .setColor("Blue")
                 .setFooter({ text: "Após o pagamento, um admin irá aprovar sua compra." });
             
             await interaction.editReply({ embeds: [replyEmbed] });
 
+            // ... (lógica de log para o admin não muda) ...
             try {
                 const logChannel = await client.channels.fetch(config.logChannelId) as TextChannel;
                 if (logChannel) {
@@ -164,7 +186,7 @@ export default new Command({
                             { name: "Usuário", value: `${interaction.user.tag} (<@${id_discord}>)`, inline: false },
                             { name: "Rifa", value: `(#${id_rifa}) ${rifa.nome_premio}`, inline: false },
                             { name: "Quantidade", value: `${quantidade}`, inline: true },
-                            { name: "Valor", value: totalPreco, inline: true }
+                            { name: "Valor", value: totalPrecoString, inline: true }
                         )
                         .setColor("Orange")
                         .setTimestamp();
