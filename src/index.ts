@@ -1,16 +1,16 @@
 import { ExtendedClient } from "./structs/ExtendedClient";
 export * from "colors"; 
 import config from "./config.json";
-// NOVO: Importa o scheduler
 import { startLotteryScheduler } from "./services/LotteryScheduler";
+import { Events } from "discord.js"; // NOVO: Importa Events
 
 const client = new ExtendedClient();
 client.start();
 export { client, config };
 
-client.on("ready", () => {
+// MODIFICADO: "ready" -> Events.ClientReady
+client.once(Events.ClientReady, () => {
     console.log("Bot is online!".green);
     
-    // NOVO: Inicia o serviço de verificação da Loteria
     startLotteryScheduler(client);
 });

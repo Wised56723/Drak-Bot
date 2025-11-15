@@ -32,6 +32,11 @@ export class ExtendedClient extends Client {
     }
 
     private async registerCommands() {
+        // --- MODIFICAÇÃO AQUI ---
+        // Precisamos que o JSON lide com BigInt
+        (BigInt.prototype as any).toJSON = function() { return this.toString(); };
+        // --- FIM DA MODIFICAÇÃO ---
+
         const commands: ApplicationCommandData[] = [];
         const commandFiles = await glob(path.join(__dirname, "..", "commands", "**", "*.{ts,js}"));
 
@@ -46,8 +51,6 @@ export class ExtendedClient extends Client {
             this.commands.set(command.name, command);
             commands.push(command);
 
-            // MODIFICADO: Os handlers de modal agora são armazenados com um '_' no final
-            // se eles esperam IDs dinâmicos.
             if (command.buttons) command.buttons.forEach((run, key) => this.buttons.set(key, run));
             if (command.modals) command.modals.forEach((run, key) => this.modals.set(key, run));
             if (command.selects) command.selects.forEach((run, key) => this.selects.set(key, run));
@@ -58,10 +61,12 @@ export class ExtendedClient extends Client {
         const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN!);
         try {
             console.log(`[COMANDOS]: Registrando ${commands.length} slash commands...`);
+            
             await rest.put(
                 Routes.applicationCommands(process.env.CLIENT_ID!), 
                 { body: commands }
             );
+
             console.log(`[COMANDOS]: Slash commands registrados com sucesso!`);
         } catch (error) {
             console.error("[ERRO API]: Falha ao registrar comandos:", error);
@@ -82,13 +87,10 @@ export class ExtendedClient extends Client {
                 });
             }
             
-            // LÓGICA DE MODAL ATUALIZADA
             else if (interaction.isModalSubmit()) {
-                // Tenta encontrar uma correspondência exata primeiro
                 let modal = this.modals.get(interaction.customId);
                 
                 if (!modal) {
-                    // Se falhar, procura por um handler dinâmico (que começa com o ID)
                     const modalKey = Array.from(this.modals.keys())
                         .find(key => interaction.customId.startsWith(key));
                     
@@ -97,7 +99,6 @@ export class ExtendedClient extends Client {
                     }
                 }
                 
-                // Passa 'this' (o client) para o handler
                 if (modal) modal(interaction, this); 
             }
             
