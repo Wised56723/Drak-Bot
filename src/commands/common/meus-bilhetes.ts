@@ -1,10 +1,12 @@
+// src/commands/common/meus-bilhetes.ts
+
 import { 
     ApplicationCommandType, 
     EmbedBuilder
 } from "discord.js";
 import { Command } from "../../structs/types/Command";
-// NOVO: Importa o Prisma
 import { prisma } from "../../prismaClient";
+import { Logger } from "../../utils/Logger"; // Importa o Logger
 
 export default new Command({
     name: "meus-bilhetes",
@@ -14,7 +16,6 @@ export default new Command({
 
     async run({ client, interaction, options }) {
 
-        // 1. Verificação de DM (Sem mudança)
         if (interaction.guild) {
             return interaction.reply({
                 content: "Este comando só pode ser usado na minha conversa privada (DM).",
@@ -27,24 +28,19 @@ export default new Command({
         const id_discord = interaction.user.id;
 
         try {
-            // 2. VERIFICAR SE O USUÁRIO ESTÁ CADASTRADO
             const usuario = await prisma.usuario.findUnique({
                 where: { id_discord: id_discord }
             });
 
             if (!usuario) {
-                return interaction.editReply("Você não está cadastrado! Use `/cadastro` primeiro.");
+                return interaction.editReply("Você não está cadastrado! Use o comando de registo primeiro.");
             }
 
-            // 3. BUSCAR TODAS AS COMPRAS E BILHETES DO USUÁRIO
-            // O Prisma torna isto muito mais fácil!
             const compras = await prisma.compras.findMany({
                 where: { id_usuario_fk: id_discord },
-                // 'include' é como um JOIN. Pedimos para incluir
-                // os dados da Rifa e os Bilhetes associados.
                 include: {
-                    rifa: true,     // Traz os dados da Rifa
-                    bilhetes: true  // Traz a lista de Bilhetes
+                    rifa: true,
+                    bilhetes: true
                 },
                 orderBy: [
                     { rifa: { id_rifa: 'desc' } },
@@ -56,14 +52,11 @@ export default new Command({
                 return interaction.editReply("Você ainda não fez nenhuma compra de rifa.");
             }
 
-            // 4. MONTAR O EMBED
             const embed = new EmbedBuilder()
                 .setTitle(`Minhas Compras e Bilhetes`)
                 .setColor("Blue")
                 .setDescription("Aqui está um resumo de todas as suas atividades de rifa.");
 
-            // Agrupa as compras por Rifa para organizar o Embed
-            // (Esta parte da lógica não muda)
             const rifasAgrupadas: Record<number, typeof compras> = {};
             for (const compra of compras) {
                 if (!rifasAgrupadas[compra.id_rifa_fk]) {
@@ -72,10 +65,9 @@ export default new Command({
                 rifasAgrupadas[compra.id_rifa_fk].push(compra);
             }
 
-            // Adiciona um campo para cada Rifa
             for (const rifaId in rifasAgrupadas) {
                 const comprasDaRifa = rifasAgrupadas[rifaId];
-                const nomePremio = comprasDaRifa[0].rifa.nome_premio; // Acesso via Prisma
+                const nomePremio = comprasDaRifa[0].rifa.nome_premio; 
                 
                 let campoValor = "";
 
@@ -83,7 +75,6 @@ export default new Command({
                     const data = new Date(compra.data_compra).toLocaleDateString('pt-BR');
                     
                     if (compra.status === 'aprovada') {
-                        // Acesso via Prisma
                         const numeros = compra.bilhetes.map(b => b.numero_bilhete).join(', ');
                         campoValor += `✅ **Aprovada** (ID: \`${compra.id_compra}\`) - ${compra.quantidade} bilhete(s)\n`;
                         campoValor += `> \`\`\`${numeros || 'Nenhum bilhete encontrado'}\`\`\`\n`;
@@ -100,7 +91,8 @@ export default new Command({
             await interaction.editReply({ embeds: [embed] });
 
         } catch (error: any) {
-            console.error("Erro no comando /meus-bilhetes (Prisma):", error);
+            // Log com Logger
+            Logger.error("Comando", `Erro ao executar /meus-bilhetes para ${id_discord}`, error);
             await interaction.editReply("Ocorreu um erro inesperado ao buscar suas compras. 😢");
         }
     },

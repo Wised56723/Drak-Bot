@@ -1,11 +1,13 @@
+// src/services/LotteryScheduler.ts
+
 import { EmbedBuilder, TextChannel } from "discord.js";
 import { ExtendedClient } from "../structs/ExtendedClient";
-// NOVO: Importa o Prisma e tipos
 import { prisma } from "../prismaClient";
 import { Rifa } from "@prisma/client";
-// NOVO: Importa apenas as funções necessárias
 import { countBilhetesVendidos, getAllParticipants, updateRaffleMessage } from "../utils/RaffleEmbed";
+import { Logger } from "../utils/Logger"; // Importa o Logger
 
+const CONTEXT = "Loteria"; // Contexto de Log para este serviço
 const CHECK_INTERVAL = 24 * 60 * 60 * 1000; 
 
 // ... (função calculateNextDrawDate não muda) ...
@@ -26,7 +28,8 @@ function calculateNextDrawDate(): Date {
  */
 async function processRifaMetaHit(client: ExtendedClient, rifa: Rifa) {
     try {
-        console.log(`[LOTERIA]: Rifa #${rifa.id_rifa} atingiu a meta. Processando...`);
+        // Log com Logger
+        Logger.info(CONTEXT, `Rifa #${rifa.id_rifa} atingiu a meta. Processando...`);
 
         const drawDate = calculateNextDrawDate();
         const drawDateString = drawDate.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -41,7 +44,6 @@ async function processRifaMetaHit(client: ExtendedClient, rifa: Rifa) {
         });
 
         // 2. Atualiza a Mensagem Pública
-        // A 'updateRaffleMessage' agora sabe como lidar com o status 'aguardando_sorteio'
         await updateRaffleMessage(client, rifa.id_rifa);
 
         // 3. Notificar todos os participantes
@@ -61,13 +63,16 @@ async function processRifaMetaHit(client: ExtendedClient, rifa: Rifa) {
                 const user = await client.users.fetch(userId);
                 await user.send({ embeds: [dmEmbed] });
             } catch (dmError) {
-                console.error(`Erro ao enviar DM (Loteria) para ${userId}:`, dmError);
+                // Log com Logger
+                Logger.error(CONTEXT, `Erro ao enviar DM (Agendamento Loteria) para ${userId}`, dmError);
             }
         }
-        console.log(`[LOTERIA]: Rifa #${rifa.id_rifa} processada. Sorteio em ${drawDateString}.`);
+        // Log com Logger
+        Logger.info(CONTEXT, `Rifa #${rifa.id_rifa} processada. Sorteio em ${drawDateString}.`);
 
     } catch (error) {
-        console.error(`[ERRO LOTERIA]: Falha ao processar rifa #${rifa.id_rifa}:`, error);
+        // Log com Logger
+        Logger.error(CONTEXT, `Falha ao processar rifa #${rifa.id_rifa}`, error);
     }
 }
 
@@ -75,7 +80,8 @@ async function processRifaMetaHit(client: ExtendedClient, rifa: Rifa) {
  * Verifica todas as rifas 'ativas' do tipo 'loteria'
  */
 async function checkLotteryRifas(client: ExtendedClient) {
-    console.log("[LOTERIA]: Verificando rifas 'loteria' ativas...");
+    // Log com Logger
+    Logger.info(CONTEXT, "Verificando rifas 'loteria' ativas...");
     try {
         // 1. Busca rifas com Prisma
         const rifas = await prisma.rifa.findMany({
@@ -86,7 +92,8 @@ async function checkLotteryRifas(client: ExtendedClient) {
         });
 
         if (rifas.length === 0) {
-            console.log("[LOTERIA]: Nenhuma rifa 'loteria' ativa encontrada.");
+            // Log com Logger
+            Logger.info(CONTEXT, "Nenhuma rifa 'loteria' ativa encontrada.");
             return;
         }
 
@@ -99,7 +106,8 @@ async function checkLotteryRifas(client: ExtendedClient) {
             }
         }
     } catch (error) {
-        console.error("[ERRO LOTERIA]: Falha no loop de verificação:", error);
+        // Log com Logger
+        Logger.error(CONTEXT, "Falha no loop de verificação (checkLotteryRifas)", error);
     }
 }
 
@@ -107,7 +115,8 @@ async function checkLotteryRifas(client: ExtendedClient) {
  * Inicia o serviço de verificação da loteria
  */
 export function startLotteryScheduler(client: ExtendedClient) {
-    console.log("[LOTERIA]: Serviço de Sorteio da Loteria iniciado.");
+    // Log com Logger
+    Logger.info(CONTEXT, "Serviço de Sorteio da Loteria iniciado.");
     checkLotteryRifas(client); 
     setInterval(() => checkLotteryRifas(client), CHECK_INTERVAL);
 }

@@ -1,12 +1,13 @@
+// src/utils/RaffleEmbed.ts
+
 import { EmbedBuilder, TextChannel, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { prisma } from "../prismaClient";
 import type { Rifa, Usuario } from "@prisma/client";
-// --- CORREÇÃO AQUI ---
-export type { Rifa, Usuario } from "@prisma/client"; // Era "@prismaclient"
-// --- FIM DA CORREÇÃO ---
+export type { Rifa, Usuario } from "@prisma/client";
 import { ExtendedClient } from "../structs/ExtendedClient";
+import { Logger } from "./Logger"; // Importa o Logger
 
-// --- INTERFACES (Corrigidas) ---
+// --- CORREÇÃO: Definições de tipo/interface adicionadas ---
 export interface Vencedor {
     id_discord: string;
     nome: string;
@@ -18,23 +19,21 @@ interface TopBuyer {
     total_comprado: number;
 }
 export type Premios = Record<string, string>;
+// --- FIM DA CORREÇÃO ---
 
-
-// --- FUNÇÕES HELPER (Corrigidas) ---
 
 /**
  * Busca o ranking de top compradores (IGNORA BILHETES GRÁTIS)
  */
 async function getTopBuyers(rifaId: number, limit: number): Promise<TopBuyer[]> {
     
-    // Lógica de Ranking (Corrigida)
     const comprasAgregadas = await prisma.compras.groupBy({
         by: ['id_usuario_fk'],
         where: {
             id_rifa_fk: rifaId,
             status: 'aprovada',
             bilhetes: {
-                some: { is_free: false } // Apenas compras com bilhetes pagos
+                some: { is_free: false } 
             }
         },
         _sum: {
@@ -191,10 +190,11 @@ export async function updateRaffleMessage(client: ExtendedClient, rifaId: number
         }
         
         await message.edit(messageData);
-        console.log(`[UPDATE]: Mensagem da Rifa #${rifaId} (e Ranking) atualizada.`);
+        
+        Logger.info("Desconhecido", `[UPDATE]: Mensagem da Rifa #${rifaId} (e Ranking) atualizada.`);
 
     } catch (error) {
-        console.error(`[ERRO UPDATE]: Falha ao atualizar mensagem da Rifa #${rifaId}:`, error);
+        Logger.error("Desconhecido", `[ERRO UPDATE]: Falha ao atualizar mensagem da Rifa #${rifaId}`, error);
     }
 }
 

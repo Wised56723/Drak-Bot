@@ -1,7 +1,8 @@
+// src/commands/admin/setup.ts
+
 import { 
     ApplicationCommandType, 
     ApplicationCommandOptionType,
-    // ... (outras importações discord.js não mudam) ...
     PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
     ButtonStyle, ButtonInteraction, Collection, ModalBuilder,
     TextInputBuilder, TextInputStyle, ModalSubmitInteraction,
@@ -11,11 +12,13 @@ import { Command } from "../../structs/types/Command";
 import { prisma } from "../../prismaClient";
 import { ExtendedClient } from "../../structs/ExtendedClient";
 import { config } from "../..";
-import crypto from "crypto"; // NOVO: Para gerar o código
 
-const emailRegex = /\S+@\S+\.\S+/;
+// --- IMPORTA O NOVO SERVICE ---
+import { processarRegisto } from "../../services/SetupService"; // Ajuste o caminho se necessário
+import { Logger } from "../../utils/Logger"; // Importa o Logger
 
-// ... (opções do comando 'run' não mudam) ...
+// --- Lógica do Modal foi MOVIDA para o SetupService ---
+
 export default new Command({
     name: "setup",
     description: "Comandos de configuração do servidor.",
@@ -39,83 +42,106 @@ export default new Command({
         }
     ],
 
-    // ... (função 'run' não muda) ...
+    // A função 'run' (postar card) é lógica de UI, permanece aqui.
     async run({ client, interaction, options }) {
-        // ... (código para postar o card não muda) ...
+        if (!interaction.inGuild()) return;
+        const subcomando = options.getSubcommand();
+
+        if (subcomando === "postar-card-boas-vindas") {
+            const channel = options.getChannel("canal") as TextChannel;
+            if (!channel) {
+                return interaction.reply({ content: "Canal inválido.", ephemeral: true });
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle("👋 Bem-vindo(a) ao Servidor!")
+                .setDescription(
+                    "Para aceder a todos os canais e participar das nossas atividades, precisamos que complete um breve registo.\n\n" +
+                    "Isto ajuda-nos a manter a comunidade segura e a identificar os participantes das rifas."
+                )
+                .addFields({
+                    name: "Porquê Registar?",
+                    value: "O registo é necessário para associar a sua conta do Discord às suas compras e bilhetes."
+                })
+                .setColor("Blue")
+                .setFooter({ text: "Clique no botão abaixo para iniciar." });
+
+            const row = new ActionRowBuilder<ButtonBuilder>()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId("onboarding-start-register")
+                        .setLabel("Iniciar Registo")
+                        .setStyle(ButtonStyle.Success)
+                        .setEmoji("📝")
+                );
+
+            try {
+                await channel.send({ embeds: [embed], components: [row] });
+                await interaction.reply({ content: `Mensagem de boas-vindas postada em ${channel}.`, ephemeral: true });
+            } catch (error) {
+                Logger.error("Comando", "Falha ao postar card de boas-vindas", error);
+                await interaction.reply({ content: "Não consegui enviar a mensagem nesse canal. Verifique as minhas permissões.", ephemeral: true });
+            }
+        }
     },
 
-    // ... (handler do botão 'onboarding-start-register' não muda) ...
+    // O botão (mostrar modal) é lógica de UI, permanece aqui.
     buttons: new Collection<string, (interaction: ButtonInteraction, client: ExtendedClient) => any>([
         ["onboarding-start-register", async (interaction, client) => {
-            // ... (código para verificar utilizador e mostrar modal não muda) ...
+            try {
+                const user = await prisma.usuario.findUnique({
+                    where: { id_discord: interaction.user.id }
+                });
+
+                if (user) {
+                    return interaction.reply({
+                        content: "Você já está registado! Não é necessário fazê-lo novamente.",
+                        ephemeral: true
+                    });
+                }
+
+                const modal = new ModalBuilder()
+                    .setCustomId("onboarding-modal-submit")
+                    .setTitle("Formulário de Registo");
+                
+                const nomeInput = new TextInputBuilder()
+                    .setCustomId("cadastro-nome")
+                    .setLabel("O seu nome completo")
+                    .setPlaceholder("Ex: João Maria Silva")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+                
+                const emailInput = new TextInputBuilder()
+                    .setCustomId("cadastro-email")
+                    .setLabel("O seu melhor email")
+                    .setPlaceholder("Ex: joao.silva@gmail.com")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+                
+                modal.addComponents(
+                    new ActionRowBuilder<TextInputBuilder>().addComponents(nomeInput),
+                    new ActionRowBuilder<TextInputBuilder>().addComponents(emailInput)
+                );
+                
+                await interaction.showModal(modal);
+
+            } catch (error: any) {
+                Logger.error("Botao", "Falha ao mostrar modal de registo (onboarding-start-register)", error);
+                if (!interaction.replied) {
+                    await interaction.reply({ content: "Ocorreu um erro ao abrir o formulário. Tente novamente.", ephemeral: true });
+                }
+            }
         }]
     ]),
 
-    // --- LÓGICA DO MODAL ATUALIZADA PARA GERAR CÓDIGO ---
+    // --- MODAL (Refactorado) ---
     modals: new Collection<string, (interaction: ModalSubmitInteraction, client: ExtendedClient) => any>([
         ["onboarding-modal-submit", async (interaction, client) => {
             
-            const nome = interaction.fields.getTextInputValue("cadastro-nome");
-            const email = interaction.fields.getTextInputValue("cadastro-email");
-            const id_discord = interaction.user.id;
+            // Toda a lógica de negócio foi movida.
+            // O Service cuida do 'deferReply', 'try/catch' e 'editReply'.
+            await processarRegisto(interaction, client);
 
-            if (!interaction.inGuild()) {
-                return interaction.reply({ content: "Esta interação deve ocorrer dentro de um servidor.", ephemeral: true });
-            }
-            if (!emailRegex.test(email)) {
-                return interaction.reply({ content: "Esse email não parece válido.", ephemeral: true });
-            }
-
-            await interaction.deferReply({ ephemeral: true });
-
-            // --- NOVO: Gerar Código de Indicação ---
-            // Tenta criar um código com base no nome, ex: "LUIS-A1B2"
-            const nomeBase = nome.split(' ')[0].toUpperCase().replace(/[^A-Z]/g, '').substring(0, 5);
-            let referralCode = `${nomeBase}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
-            
-            // Em caso de colisão (raro), apenas usa um código aleatório
-            const existingCode = await prisma.usuario.findUnique({ where: { referral_code: referralCode } });
-            if (existingCode) {
-                referralCode = `USER-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-            }
-            // --- FIM DA GERAÇÃO DE CÓDIGO ---
-
-            try {
-                // 1. Guardar no DB (com o código)
-                await prisma.usuario.create({
-                    data: {
-                        id_discord: id_discord,
-                        nome: nome,
-                        email: email,
-                        referral_code: referralCode // Guarda o código
-                    }
-                });
-
-                // 2. Adicionar a Função (Role)
-                const roleId = config.membroRegistadoRoleID;
-                if (!roleId) {
-                    console.error("ERRO CRÍTICO: 'membroRegistadoRoleID' não definido no config.json");
-                    return interaction.editReply("Registo salvo, mas ocorreu um erro ao atualizar as suas permissões. Contacte um admin.");
-                }
-                const member = interaction.member as GuildMember;
-                await member.roles.add(roleId);
-
-                // 3. Sucesso (com o código)
-                await interaction.editReply(
-                    `Registo concluído com sucesso, ${nome}! 🎉\n` +
-                    `Você agora tem acesso a todos os canais do servidor.\n\n` +
-                    `**O seu Código de Indicador é: \`${referralCode}\`**\n` +
-                    `Partilhe-o com amigos! Se eles o usarem numa compra acima de R$ 10,00, você ganha um bilhete grátis!`
-                );
-
-            } catch (err: any) {
-                if (err.code === 'P2002') {
-                     // ... (lógica de erro P2002 não muda) ...
-                } else {
-                    console.error("Erro ao guardar no DB ou adicionar função:", err);
-                    await interaction.editReply('Ocorreu um erro ao finalizar o seu registo. 😢 Tente novamente ou contacte um admin.');
-                }
-            }
         }]
     ])
 });
