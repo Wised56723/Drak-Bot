@@ -4,12 +4,12 @@ import { ExtendedClient } from "../structs/ExtendedClient";
 import { prisma } from "../prismaClient";
 import { updateRaffleMessage } from "../utils/RaffleEmbed";
 import { EmbedBuilder } from "discord.js";
-import { Logger, LogContext } from "../utils/Logger"; // Corrigido: Importa LogContext
-import { Prisma } from "@prisma/client"; // Necessário para tipos
+import { Logger, LogContext } from "../utils/Logger"; 
+import { Prisma } from "@prisma/client"; 
 
-const CONTEXT: LogContext = "GestaoService"; // Contexto para os logs
+const CONTEXT: LogContext = "GestaoService"; 
 
-// Define o tipo de retorno da transação
+// --- MUDANÇA 1: Atualizar o tipo de retorno ---
 type AprovacaoResult = {
     novosNumeros: string[];
     premiosGanhos: { numero: string, premio: string }[];
@@ -22,25 +22,26 @@ type AprovacaoResult = {
             preco_bilhete: number;
             total_bilhetes: number;
             id_rifa: number;
-        }
+        };
+        // Novos campos
+        public_reply_message_id: string | null;
+        public_reply_channel_id: string | null;
     };
     bonusMessage: string;
 }
 
 /**
  * Lógica de negócio para aprovar uma compra.
- * (Código original movido de gestao.ts)
  */
 export async function aprovarCompra(id_compra: number, client: ExtendedClient): Promise<string> {
     
     Logger.info(CONTEXT, `Iniciando aprovação da compra #${id_compra}...`);
     
-    // --- CORREÇÃO: 'bonusMessage' definido aqui ---
     let bonusMessage = "";
     
-    // --- CORREÇÃO: Adicionado 'Promise<AprovacaoResult>' para tipagem explícita ---
     const { novosNumeros, premiosGanhos, compra } = await prisma.$transaction(async (tx): Promise<AprovacaoResult> => {
         
+        // --- MUDANÇA 2: Selecionar os novos campos ---
         const compra = await tx.compras.findUnique({
             where: { id_compra: id_compra },
             select: {
@@ -50,7 +51,9 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
                 quantidade: true,
                 status: true,
                 id_indicador_fk: true,
-                rifa: true
+                rifa: true,
+                public_reply_message_id: true, // Adicionado
+                public_reply_channel_id: true  // Adicionado
             }
         });
 
@@ -93,23 +96,12 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             [availableTickets[i], availableTickets[j]] = [availableTickets[j], availableTickets[i]];
         }
 
-        // --- INÍCIO DA REATORAÇÃO (CORREÇÃO DO BUG) ---
-        //
-        // O bug anterior separava os bilhetes premiados dos não-premiados e priorizava
-        // a venda dos não-premiados.
-        //
-        // A lógica correta é simplesmente pegar os 'X' primeiros bilhetes da lista
-        // que já foi embaralhada, garantindo aleatoriedade total.
-
+        // (Lógica de seleção corrigida da etapa anterior)
         if (availableTickets.length < compra.quantidade) {
-            // Verificação de segurança caso a validação anterior falhe em um cenário de concorrência
             throw new Error(`Concorrência: Bilhetes disponíveis (${availableTickets.length}) é menor que a quantidade pedida (${compra.quantidade}).`);
         }
         
-        // 3. Seleciona os bilhetes diretamente da pool embaralhada
         let novosNumeros: string[] = availableTickets.slice(0, compra.quantidade);
-
-        // --- FIM DA REATORAÇÃO ---
 
         await tx.compras.update({
             where: { id_compra: id_compra },
@@ -124,13 +116,11 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             }))
         });
 
-        // 4. Verifica se *entre os bilhetes selecionados* havia algum premiado
         const premiosGanhos: { numero: string, premio: string }[] = [];
         const premiosPendentes = await tx.premiosInstantaneos.findMany({
             where: {
                 id_rifa_fk: compra.id_rifa_fk,
                 status: 'pendente',
-                // A query verifica apenas os números que acabaram de ser selecionados
                 numero_bilhete: { in: novosNumeros } 
             }
         });
@@ -148,7 +138,7 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
         
         novosNumeros.forEach((n: string) => soldTicketSet.add(n));
 
-        // 5. Lógica de Bônus (Indicador)
+        // Lógica de Bônus (Indicador)
         bonusMessage = "";
         const totalPreco = compra.quantidade * rifa.preco_bilhete;
         
@@ -161,7 +151,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             });
 
             if (freeTicketsCount < 5) {
-                // Cria uma pool de bônus (não pode ser premiado)
                 const availableForBonus: string[] = [];
                 for (let i = 0; i < rifa.total_bilhetes; i++) {
                     const num = String(i).padStart(padding, '0');
@@ -201,7 +190,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
         return { novosNumeros, premiosGanhos, compra, bonusMessage };
 
     }, {
-       // Configuração da transação
        maxWait: 5000, 
        timeout: 10000,
        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -244,6 +232,26 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     await updateRaffleMessage(client, compra.id_rifa_fk);
 
+    // --- MUDANÇA 3: Deletar a mensagem de reserva pública ---
+    if (compra.public_reply_message_id && compra.public_reply_channel_id) {
+        try {
+            const channel = await client.channels.fetch(compra.public_reply_channel_id);
+            // Verifica se o canal existe e é um canal de texto
+            if (channel && (channel.isTextBased() || channel.isThread())) { 
+                const message = await channel.messages.fetch(compra.public_reply_message_id);
+                if (message) {
+                    await message.delete();
+                    Logger.info(CONTEXT, `Mensagem de reserva pública ${message.id} deletada com sucesso.`);
+                }
+            }
+        } catch (deleteError) {
+            // Loga um aviso, mas não impede a aprovação
+            Logger.warn(CONTEXT, `Falha ao deletar mensagem de reserva pública ${compra.public_reply_message_id} (Pode já ter sido deletada).`, deleteError);
+        }
+    }
+    // --- FIM DA MUDANÇA ---
+
+
     let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>, ${novosNumeros.join(', ')})`;
     if (premiosGanhos.length > 0) {
         const premioTxt = premiosGanhos.map((p: { numero: string, premio: string }) => `Bilhete \`${p.numero}\` ganhou **${p.premio}**`).join(', ');
@@ -259,7 +267,8 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
 /**
  * Lógica de negócio para rejeitar uma compra.
- * (Código original movido de gestao.ts)
+ * (Esta função não foi alterada, MAS poderia ser estendida para
+ * editar a mensagem pública de "rejeitada" em vez de deletar)
  */
 export async function rejeitarCompra(id_compra: number, motivo: string, client: ExtendedClient): Promise<string> {
     Logger.info(CONTEXT, `Iniciando rejeição da compra #${id_compra}...`);
@@ -271,7 +280,10 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
             id_rifa_fk: true,
             id_usuario_fk: true,
             quantidade: true,
-            status: true
+            status: true,
+            // Adicionamos os campos caso queira editar a msg pública para "REJEITADA"
+            public_reply_message_id: true,
+            public_reply_channel_id: true
         }
     });
     
@@ -296,6 +308,25 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
         Logger.error(CONTEXT, `Erro ao enviar DM (rejeitar) para ${compra.id_usuario_fk}`, dmError);
     }
     
+    // (Opcional) Edita a mensagem pública para "Rejeitada"
+    if (compra.public_reply_message_id && compra.public_reply_channel_id) {
+         try {
+            const channel = await client.channels.fetch(compra.public_reply_channel_id);
+            if (channel && (channel.isTextBased() || channel.isThread())) { 
+                const message = await channel.messages.fetch(compra.public_reply_message_id);
+                if (message) {
+                    await message.edit(
+                        `❌ **Sua reserva (ID: \`${compra.id_compra}\`) foi REJEITADA.**\n` +
+                        `*Motivo: ${motivo}*\n` +
+                        `*(Esta mensagem pode ser dispensada.)*`
+                    );
+                }
+            }
+        } catch (editError) {
+            Logger.warn(CONTEXT, `Falha ao editar msg pública para Rejeitada (ID: ${compra.public_reply_message_id})`, editError);
+        }
+    }
+
     Logger.info(CONTEXT, `Compra #${id_compra} rejeitada.`);
     return `Rejeitada (<@${compra.id_usuario_fk}>)`;
 }
