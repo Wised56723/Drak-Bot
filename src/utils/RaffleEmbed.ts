@@ -1,139 +1,197 @@
-import { EmbedBuilder, TextChannel } from "discord.js";
-import db = require("../database.js");
+import { EmbedBuilder, TextChannel, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { prisma } from "../prismaClient";
+import type { Rifa, Usuario } from "@prisma/client";
+// --- CORREÇÃO AQUI ---
+export type { Rifa, Usuario } from "@prisma/client"; // Era "@prismaclient"
+// --- FIM DA CORREÇÃO ---
 import { ExtendedClient } from "../structs/ExtendedClient";
 
-// Interface para o objeto Rifa (TypeScript)
-// --- CORREÇÃO: ADICIONADO 'export' ---
-export interface Rifa {
-    id_rifa: number;
-    nome_premio: string;
-    total_bilhetes: number;
-    status: string;
-    metodo_sorteio: string;
-    meta_completude: number | null;
-    channel_id: string | null;
-    message_id: string | null;
-    preco_bilhete: number;
-    sorteio_data: string | null; // NOVO
-}
-
-// Interface para o Vencedor
+// --- INTERFACES (Corrigidas) ---
 export interface Vencedor {
     id_discord: string;
     nome: string;
     numero_bilhete: string;
 }
+interface TopBuyer {
+    id_discord: string;
+    nome: string;
+    total_comprado: number;
+}
+export type Premios = Record<string, string>;
 
-// Interface para a query de participantes
-export interface UsuarioRifa {
-    id_usuario_fk: string;
+
+// --- FUNÇÕES HELPER (Corrigidas) ---
+
+/**
+ * Busca o ranking de top compradores (IGNORA BILHETES GRÁTIS)
+ */
+async function getTopBuyers(rifaId: number, limit: number): Promise<TopBuyer[]> {
+    
+    // Lógica de Ranking (Corrigida)
+    const comprasAgregadas = await prisma.compras.groupBy({
+        by: ['id_usuario_fk'],
+        where: {
+            id_rifa_fk: rifaId,
+            status: 'aprovada',
+            bilhetes: {
+                some: { is_free: false } // Apenas compras com bilhetes pagos
+            }
+        },
+        _sum: {
+            quantidade: true
+        },
+        orderBy: {
+            _sum: {
+                quantidade: 'desc'
+            }
+        },
+        take: limit
+    });
+
+    if (comprasAgregadas.length === 0) return [];
+    
+    const userIds = comprasAgregadas.map(r => r.id_usuario_fk);
+    const users = await prisma.usuario.findMany({ where: { id_discord: { in: userIds } } });
+    const userMap = new Map(users.map(u => [u.id_discord, u.nome]));
+
+    return comprasAgregadas.map(r => ({
+        id_discord: r.id_usuario_fk,
+        nome: userMap.get(r.id_usuario_fk) || "Utilizador Desconhecido",
+        total_comprado: r._sum.quantidade || 0
+    }));
 }
 
 /**
- * Gera o Embed de status da Rifa
- * (Sem mudanças aqui)
+ * Conta bilhetes (vendidos + pendentes)
  */
-export function buildRaffleEmbed(rifa: Rifa, vendidos: number) {
-    const embed = new EmbedBuilder();
+export async function countBilhetesReservados(rifaId: number): Promise<number> {
+     const result = await prisma.compras.aggregate({
+        _sum: {
+            quantidade: true
+        },
+        where: {
+            id_rifa_fk: rifaId,
+            status: { in: ['aprovada', 'em_analise'] }
+        }
+     });
+     return result._sum.quantidade || 0;
+}
+
+/**
+ * Constrói o texto do campo do ranking
+ */
+async function buildTopBuyersField(rifa: Rifa): Promise<string> {
+    if (rifa.top_compradores_count === 0 || !rifa.top_compradores_premios) {
+        return "";
+    }
     
+    const ranking = await getTopBuyers(rifa.id_rifa, rifa.top_compradores_count);
+    const premios: Premios = JSON.parse(rifa.top_compradores_premios || "{}");
+    if (ranking.length === 0) return "Ainda não há compradores no ranking.";
+
+    const icons = ["🥇", "🥈", "🥉"];
+    let text = "";
+    ranking.forEach((buyer, index) => {
+        const pos = index + 1;
+        const icon = icons[index] || "🏅";
+        const premioDesc = premios[pos] || "Prémio";
+        text += `**${pos}. ${icon} ${buyer.nome} (${buyer.total_comprado} bilhetes)**\n`
+              + `> *Prémio: ${premioDesc}*\n`;
+    });
+    return text;
+}
+
+
+/**
+ * Gera o Embed de status da Rifa
+ */
+export async function buildRaffleEmbed(rifa: Rifa, vendidos: number) {
+    const embed = new EmbedBuilder();
     const progresso = (vendidos / rifa.total_bilhetes) * 100;
     const metodo = rifa.metodo_sorteio === 'drak' ? 'Sorteio pelo Drak Bot' : 'Sorteio pela Loteria Federal';
-    const preco = rifa.preco_bilhete.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
+    const preco = rifa.preco_bilhete;
     embed.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
     embed.setDescription(`Participe da rifa e concorra a **${rifa.nome_premio}**!`);
     embed.setColor("Gold");
-    
     embed.addFields(
-        { 
-            name: "🎟️ Progresso", 
-            value: `**${vendidos} / ${rifa.total_bilhetes}** bilhetes vendidos (${progresso.toFixed(1)}%)`,
-            inline: false 
-        },
-        { name: "💰 Preço por Bilhete", value: preco, inline: true },
+        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
+        { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
         { name: "Mecânica", value: metodo, inline: true },
         { name: "Status", value: rifa.status.toUpperCase(), inline: true }
     );
-    
     if (rifa.metodo_sorteio === 'loteria' && rifa.meta_completude) {
-        embed.addFields({
-            name: "Meta para Sorteio",
-            value: `Atingir ${(rifa.meta_completude * 100)}% de vendas.`,
-            inline: true
-        });
+        embed.addFields({ name: "Meta para Sorteio", value: `Atingir ${(rifa.meta_completude * 100)}% de vendas.`, inline: true });
     }
-
-    embed.setFooter({ text: "Use /comprar na minha DM para garantir seus bilhetes." });
+    if (rifa.top_compradores_count > 0) {
+        const rankingText = await buildTopBuyersField(rifa);
+        if (rankingText) {
+            embed.addFields({ name: "🏆 Top Compradores", value: rankingText, inline: false });
+        }
+    }
+    embed.setFooter({ text: "Clique no botão abaixo para comprar." });
     embed.setTimestamp();
 
-    return embed;
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`buy-ticket_${rifa.id_rifa}`)
+                .setLabel("🎟️ Comprar Bilhete")
+                .setStyle(ButtonStyle.Success)
+        );
+
+    return { embeds: [embed], components: [row] };
 }
 
 /**
  * Busca uma rifa no DB pelo ID
- * (Sem mudanças aqui)
  */
-export function getRifaById(id: number): Promise<Rifa | null> {
-    return new Promise((resolve, reject) => {
-        db.get("SELECT * FROM Rifas WHERE id_rifa = ?", [id], (err: Error, row: Rifa) => {
-            if (err) return reject(err);
-            resolve(row || null);
-        });
+export async function getRifaById(id: number): Promise<Rifa | null> {
+    return prisma.rifa.findUnique({
+        where: { id_rifa: id }
     });
 }
 
 /**
  * Conta quantos bilhetes foram aprovados para uma rifa
- * (Sem mudanças aqui)
  */
-export function countBilhetesVendidos(rifaId: number): Promise<number> {
-     return new Promise((resolve, reject) => {
-        const sql = `
-            SELECT COUNT(b.id_bilhete) as vendidos 
-            FROM Bilhetes b
-            JOIN Compras c ON b.id_compra_fk = c.id_compra
-            WHERE c.id_rifa_fk = ? AND c.status = 'aprovada'
-        `;
-        
-        db.get(sql, [rifaId], (err: Error, row: { vendidos: number }) => {
-            if (err) return reject(err);
-            resolve(row?.vendidos || 0);
-        });
-    });
+export async function countBilhetesVendidos(rifaId: number): Promise<number> {
+     return prisma.bilhetes.count({
+        where: {
+            compra: {
+                id_rifa_fk: rifaId,
+                status: 'aprovada'
+            }
+        }
+     });
 }
 
 
 /**
  * Atualiza a mensagem pública de uma rifa
- * (MODIFICADO para lidar com o novo status)
  */
 export async function updateRaffleMessage(client: ExtendedClient, rifaId: number) {
     try {
         const rifa = await getRifaById(rifaId);
-        if (!rifa || !rifa.channel_id || !rifa.message_id) {
-            console.error(`[UPDATE]: Rifa ${rifaId} não encontrada ou não possui mensagem/canal.`);
-            return;
-        }
-
+        if (!rifa || !rifa.channel_id || !rifa.message_id) return;
+        
         const channel = await client.channels.fetch(rifa.channel_id) as TextChannel;
         if (!channel) return;
-
+        
         const message = await channel.messages.fetch(rifa.message_id);
         if (!message) return;
 
         const vendidos = await countBilhetesVendidos(rifa.id_rifa);
         
-        let newEmbed: EmbedBuilder;
+        let messageData: { embeds: EmbedBuilder[], components: ActionRowBuilder<ButtonBuilder>[] };
         
-        // Decide qual embed usar
         if (rifa.status === 'aguardando_sorteio' && rifa.sorteio_data) {
-            newEmbed = buildRaffleAwaitingDrawEmbed(rifa, rifa.sorteio_data, vendidos);
+            messageData = await buildRaffleAwaitingDrawEmbed(rifa, rifa.sorteio_data.toISOString(), vendidos);
         } else {
-            newEmbed = buildRaffleEmbed(rifa, vendidos);
+            messageData = await buildRaffleEmbed(rifa, vendidos);
         }
         
-        await message.edit({ embeds: [newEmbed] });
-        console.log(`[UPDATE]: Mensagem da Rifa #${rifaId} atualizada.`);
+        await message.edit(messageData);
+        console.log(`[UPDATE]: Mensagem da Rifa #${rifaId} (e Ranking) atualizada.`);
 
     } catch (error) {
         console.error(`[ERRO UPDATE]: Falha ao atualizar mensagem da Rifa #${rifaId}:`, error);
@@ -142,91 +200,95 @@ export async function updateRaffleMessage(client: ExtendedClient, rifaId: number
 
 /**
  * Busca uma lista de IDs de todos os participantes (sem duplicatas)
- * (Sem mudanças aqui)
  */
-export function getAllParticipants(rifaId: number): Promise<string[]> {
-    return new Promise((resolve, reject) => {
-        const sql = `
-            SELECT DISTINCT c.id_usuario_fk
-            FROM Compras c
-            WHERE c.id_rifa_fk = ? AND c.status = 'aprovada'
-        `;
-        
-        db.all(sql, [rifaId], (err: Error, rows: UsuarioRifa[]) => {
-            if (err) return reject(err);
-            resolve(rows.map(r => r.id_usuario_fk));
-        });
+export async function getAllParticipants(rifaId: number): Promise<string[]> {
+    const users = await prisma.compras.findMany({
+        where: {
+            id_rifa_fk: rifaId,
+            status: 'aprovada'
+        },
+        select: {
+            id_usuario_fk: true
+        },
+        distinct: ['id_usuario_fk']
     });
+    return users.map(u => u.id_usuario_fk);
 }
 
 /**
  * Gera o Embed de Vencedor
- * (Sem mudanças aqui)
  */
-export function buildRaffleWinnerEmbed(rifa: Rifa, vencedor: Vencedor) {
-    const embed = new EmbedBuilder()
-    .setTitle(`🎉 Sorteio Finalizado! Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`)
-    .setDescription(`Temos um vencedor para a rifa **${rifa.nome_premio}**!`)
-    .setColor("Green")
-    .addFields(
+export async function buildRaffleWinnerEmbed(rifa: Rifa, vencedor: Vencedor) {
+    const embed = new EmbedBuilder();
+    embed.setTitle(`🎉 Sorteio Finalizado! Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
+    embed.setDescription(`Temos um vencedor para a rifa **${rifa.nome_premio}**!`);
+    embed.setColor("Green");
+    embed.addFields(
         { name: "🏆 Vencedor", value: `**${vencedor.nome}** (<@${vencedor.id_discord}>)`, inline: false },
         { name: "Número Sorteado", value: `\`\`\`${vencedor.numero_bilhete}\`\`\``, inline: true },
         { name: "Status", value: "FINALIZADA", inline: true }
-    )
-    .setFooter({ text: "Obrigado a todos que participaram!" })
-    .setTimestamp();
-    return embed;
+    );
+    if (rifa.top_compradores_count > 0) {
+        const rankingText = await buildTopBuyersField(rifa);
+        if (rankingText) {
+            embed.addFields({ name: "🏆 Ranking Final Top Compradores", value: rankingText, inline: false });
+        }
+    }
+    embed.setFooter({ text: "Obrigado a todos que participaram!" });
+    embed.setTimestamp();
+    return { embeds: [embed], components: [] };
 }
 
 /**
  * Gera o Embed de Rifa Cancelada
- * (Sem mudanças aqui)
  */
 export function buildRaffleCancelledEmbed(rifa: Rifa, motivo: string) {
-    const embed = new EmbedBuilder()
-    .setTitle(`❌ Rifa Cancelada - #${rifa.id_rifa}: ${rifa.nome_premio}`)
-    .setDescription(`Esta rifa foi cancelada e não está mais ativa.`)
-    .setColor("Red")
-    .addFields(
+    const embed = new EmbedBuilder();
+    embed.setTitle(`❌ Rifa Cancelada - #${rifa.id_rifa}: ${rifa.nome_premio}`);
+    embed.setDescription(`Esta rifa foi cancelada e não está mais ativa.`);
+    embed.setColor("Red");
+    embed.addFields(
         { name: "Status", value: "CANCELADA", inline: true },
         { name: "Motivo", value: motivo, inline: false }
-    )
-    .setFooter({ text: "Novas compras estão bloqueadas." })
-    .setTimestamp();
-    return embed;
+    );
+    embed.setFooter({ text: "Novas compras estão bloqueadas." });
+    embed.setTimestamp();
+    return { embeds: [embed], components: [] };
 }
 
 /**
- * NOVO: Gera o Embed de "Aguardando Sorteio"
+ * Gera o Embed de "Aguardando Sorteio"
  */
-export function buildRaffleAwaitingDrawEmbed(rifa: Rifa, sorteioDateISO: string, vendidos: number) {
+export async function buildRaffleAwaitingDrawEmbed(rifa: Rifa, sorteioDateISO: string, vendidos: number) {
     const embed = new EmbedBuilder();
-    
     const progresso = (vendidos / rifa.total_bilhetes) * 100;
-    const preco = rifa.preco_bilhete.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const preco = rifa.preco_bilhete;
     const dataSorteio = new Date(sorteioDateISO).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' });
-
     embed.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
     embed.setDescription(`**META ATINGIDA!** O sorteio foi agendado!`);
     embed.setColor("Blue");
-    
     embed.addFields(
-        { 
-            name: "📅 Data do Sorteio (Loteria Federal)", 
-            value: `**${dataSorteio}**`,
-            inline: false 
-        },
-        { 
-            name: "🎟️ Progresso", 
-            value: `**${vendidos} / ${rifa.total_bilhetes}** bilhetes vendidos (${progresso.toFixed(1)}%)`,
-            inline: false 
-        },
-        { name: "💰 Preço por Bilhete", value: preco, inline: true },
+        { name: "📅 Data do Sorteio (Loteria Federal)", value: `**${dataSorteio}**`, inline: false },
+        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
+        { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
         { name: "Status", value: "AGUARDANDO SORTEIO", inline: true }
     );
-
-    embed.setFooter({ text: "Boa sorte! As vendas continuam abertas até o sorteio." });
+    if (rifa.top_compradores_count > 0) {
+        const rankingText = await buildTopBuyersField(rifa);
+        if (rankingText) {
+            embed.addFields({ name: "🏆 Top Compradores", value: rankingText, inline: false });
+        }
+    }
+    embed.setFooter({ text: "Boa sorte! As vendas continuam abertas." });
     embed.setTimestamp();
 
-    return embed;
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`buy-ticket_${rifa.id_rifa}`)
+                .setLabel("🎟️ Comprar Bilhete")
+                .setStyle(ButtonStyle.Success)
+        );
+
+    return { embeds: [embed], components: [row] };
 }

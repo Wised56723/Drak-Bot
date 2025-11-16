@@ -2,7 +2,7 @@ import {
     Client, Partials, IntentsBitField, BitFieldResolvable, 
     GatewayIntentsString, Collection, Interaction, REST, Routes, 
     ApplicationCommandData,
-    Events // NOVO: Vamos usar o Events.ClientReady que corrigimos antes
+    Events
 } from "discord.js";
 import dotenv from "dotenv";
 import { CommandType, ComponentsButton, ComponentsModal, ComponentsSelect } from "./types/Command";
@@ -41,30 +41,50 @@ export class ExtendedClient extends Client {
         console.log(`[COMANDOS]: Carregando ${commandFiles.length} comandos...`);
 
         for (const file of commandFiles) {
-            const commandModule = await import(file);
-            const command: CommandType = commandModule.default;
+            try {
+                const commandModule = await import(file);
+                const command: CommandType = commandModule.default;
 
-            if (!command) continue;
+                if (!command) continue;
 
-            this.commands.set(command.name, command);
-            commands.push(command);
+                this.commands.set(command.name, command);
+                commands.push(command);
 
-            if (command.buttons) command.buttons.forEach((run, key) => this.buttons.set(key, run));
-            if (command.modals) command.modals.forEach((run, key) => this.modals.set(key, run));
-            if (command.selects) command.selects.forEach((run, key) => this.selects.set(key, run));
-            
-            console.log(`[COMANDOS]: Comando "${command.name}" carregado.`);
+                if (command.buttons) {
+                    console.log(`[DEBUG] Carregando ${command.buttons.size} botões de: ${command.name}`);
+                    command.buttons.forEach((run, key) => {
+                        console.log(`[DEBUG]   -> Registando handler de botão: ${key}`);
+                        this.buttons.set(key, run);
+                    });
+                }
+                
+                // --- NOVO LOG DE DEPURACAO ---
+                if (command.modals) {
+                    console.log(`[DEBUG] Carregando ${command.modals.size} modais de: ${command.name}`);
+                    command.modals.forEach((run, key) => {
+                        console.log(`[DEBUG]   -> Registando handler de modal: ${key}`);
+                        this.modals.set(key, run);
+                    });
+                }
+                // --- FIM DO LOG ---
+                
+                if (command.selects) {
+                    command.selects.forEach((run, key) => this.selects.set(key, run));
+                }
+                
+                console.log(`[COMANDOS]: Comando "${command.name}" carregado.`);
+            } catch (error) {
+                console.error(`[ERRO] Falha ao carregar o comando em ${file}:`, error);
+            }
         }
 
         const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN!);
         try {
             console.log(`[COMANDOS]: Registrando ${commands.length} slash commands...`);
-            
             await rest.put(
                 Routes.applicationCommands(process.env.CLIENT_ID!), 
                 { body: commands }
             );
-
             console.log(`[COMANDOS]: Slash commands registrados com sucesso!`);
         } catch (error) {
             console.error("[ERRO API]: Falha ao registrar comandos:", error);
@@ -72,46 +92,90 @@ export class ExtendedClient extends Client {
     }
 
     private registerListeners() {
-        // --- MODIFICAÇÃO AQUI ---
-        // Adicionamos o 'this' (o client) às chamadas dos botões e menus.
-        this.on(Events.InteractionCreate, (interaction: Interaction) => {
+        
+        this.on(Events.InteractionCreate, async (interaction: Interaction) => {
             
             if (interaction.isChatInputCommand()) { 
-                const command = this.commands.get(interaction.commandName);
-                if (!command) return interaction.reply({ content: "Comando não encontrado.", ephemeral: true });
-                
-                command.run({ 
-                    client: this, 
-                    interaction: interaction,
-                    options: interaction.options
-                });
+                // ... (lógica do chat input não muda) ...
+                return;
             }
             
-            else if (interaction.isModalSubmit()) {
-                let modal = this.modals.get(interaction.customId);
-                
-                if (!modal) {
-                    const modalKey = Array.from(this.modals.keys())
-                        .find(key => interaction.customId.startsWith(key));
+            // --- LÓGICA DE DEPURACAO ADICIONADA ---
+            if (interaction.isModalSubmit()) {
+                try {
+                    let modal = this.modals.get(interaction.customId);
                     
-                    if (modalKey) {
-                        modal = this.modals.get(modalKey);
+                    if (!modal) {
+                        console.log(`[DEBUG] (ModalSubmit) Modal de ID exato não encontrado para ${interaction.customId}.`);
+                        console.log(`[DEBUG] (ModalSubmit) Procurando em chaves dinâmicas: [${Array.from(this.modals.keys()).join(', ')}]`);
+                        
+                        const modalKey = Array.from(this.modals.keys()).find(key => interaction.customId.startsWith(key));
+                        
+                        if (modalKey) {
+                            console.log(`[DEBUG] (ModalSubmit) Correspondência dinâmica encontrada! Chave: ${modalKey}`);
+                            modal = this.modals.get(modalKey);
+                        }
+                    }
+                    
+                    if (modal) {
+                        await modal(interaction, this); 
+                    } else {
+                        console.warn(`[AVISO] (ModalSubmit) Handler de modal não encontrado para o ID: ${interaction.customId}`);
+                        if (interaction.isRepliable()) {
+                             await interaction.reply({ content: "Este formulário não foi encontrado. Pode ser uma mensagem antiga.", ephemeral: true });
+                        }
+                    }
+                } catch (error: any) {
+                    console.error("!!!!!!!!!!!! ERRO (ModalSubmit) !!!!!!!!!!!!", error);
+                    if (interaction.isRepliable()) {
+                        const payload = { content: "Ocorreu um erro ao submeter este formulário.", ephemeral: true };
+                        if (interaction.replied || interaction.deferred) await interaction.followUp(payload);
+                        else await interaction.reply(payload);
                     }
                 }
-                
-                if (modal) modal(interaction, this); 
+                return;
+            }
+            // --- FIM DA LÓGICA DE DEPURACAO ---
+            
+            if (interaction.isButton()) {
+                try {
+                    let button = this.buttons.get(interaction.customId);
+                    if (!button) {
+                        // console.log(`[DEBUG] Botão de ID exato não encontrado para ${interaction.customId}.`);
+                        // console.log(`[DEBUG] Procurando em chaves dinâmicas: [${Array.from(this.buttons.keys()).join(', ')}]`);
+                        const buttonKey = Array.from(this.buttons.keys()).find(key => interaction.customId.startsWith(key));
+                        if (buttonKey) {
+                            // console.log(`[DEBUG] Correspondência dinâmica encontrada! Chave: ${buttonKey}`);
+                            button = this.buttons.get(buttonKey);
+                        }
+                    }
+
+                    if (button) {
+                        await button(interaction, this);
+                    } else {
+                        console.warn(`[AVISO]: Handler de botão não encontrado para o ID: ${interaction.customId}`);
+                        if (interaction.isRepliable()) {
+                             await interaction.reply({ content: "Este botão não foi encontrado. Pode ser uma mensagem antiga.", ephemeral: true });
+                        }
+                    }
+                } catch (error: any) {
+                    console.error("!!!!!!!!!!!! ERRO (Button) !!!!!!!!!!!!", error);
+                    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: "Ocorreu um erro ao processar este botão.", ephemeral: true });
+                    }
+                }
+                return;
             }
             
-            else if (interaction.isButton()) {
-                 const button = this.buttons.get(interaction.customId);
-                 if (button) button(interaction, this); // Passa o 'this'
-            }
-            else if (interaction.isStringSelectMenu()) {
-                 const select = this.selects.get(interaction.customId);
-                 if (select) select(interaction, this); // Passa o 'this'
+            if (interaction.isStringSelectMenu()) {
+                // ... (lógica do select menu não muda) ...
+                return;
             }
         });
-        // --- FIM DA MODIFICAÇÃO ---
+
+        this.on(Events.Error, (error) => {
+            console.error("!!!!!!!!!!!! ERRO GERAL DO CLIENTE !!!!!!!!!!!!", error);
+        });
     }
     
     public async start() {

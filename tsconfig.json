@@ -20,6 +20,6 @@
         "experimentalDecorators": true,
         "allowJs": true, // <--- ADICIONE ESTA LINHA
     },
-    "include": ["src/**/*"],
+    "include": ["src/**/*", "src/commands/admin/setup.ts"],
     "exclude": ["node_modules", "**/*.spec.ts"]
 }
