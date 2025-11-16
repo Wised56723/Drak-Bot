@@ -38,38 +38,106 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
     try {
         const [, channelId] = interaction.customId.split('_');
         const channel = await client.channels.fetch(channelId) as TextChannel;
-        // ... (resto da lógica de criação, parsing de prêmios e transação) ...
-        // Nota: Você deve verificar se o preço é válido antes de prosseguir
-
-        // Parse basic fields from modal (form inputs from the admin UI)
-        const nome_premio = interaction.fields.getTextInputValue("rifa-premio");
-        const precoInput = interaction.fields.getTextInputValue("rifa-preco");
-        const bilhetesInput = interaction.fields.getTextInputValue("rifa-bilhetes");
-        const metodoInput = interaction.fields.getTextInputValue("rifa-metodo");
-        const premiosSecundarios = interaction.fields.getTextInputValue("premios-secundarios") || "";
-
-        const precoParsed = parseFloat(precoInput.replace(',', '.'));
-        const totalBilhetes = parseInt(bilhetesInput);
-
-        if (!nome_premio || isNaN(precoParsed) || isNaN(totalBilhetes) || totalBilhetes <= 0 || precoParsed <= 0) {
-            return interaction.editReply("Dados inválidos no formulário. Verifique o prêmio, preço e total de bilhetes.");
+        if (!channel || !channel.isTextBased()) {
+            return interaction.editReply("Erro: Canal não encontrado ou inválido.");
         }
 
-        const metodo_sorteio = metodoInput && metodoInput.toLowerCase().startsWith("loteria") ? "loteria" : "drak";
-
-        // Create the rifa in the database
-        const newRifa = await prisma.rifa.create({
-            data: {
-                nome_premio: nome_premio,
-                total_bilhetes: totalBilhetes,
-                preco_bilhete: precoParsed,
-                metodo_sorteio: metodo_sorteio,
-                status: 'ativa',
-                top_compradores_count: 0,
-                top_compradores_premios: premiosSecundarios || null
+        const nome_premio = interaction.fields.getTextInputValue("rifa-premio");
+        const preco_bilhete_input = interaction.fields.getTextInputValue("rifa-preco").replace(',', '.');
+        const total_bilhetes_input = interaction.fields.getTextInputValue("rifa-bilhetes");
+        const metodo_input_raw = interaction.fields.getTextInputValue("rifa-metodo").toLowerCase();
+        const premios_secundarios_input = interaction.fields.getTextInputValue("premios-secundarios");
+        
+        const preco_bilhete = parseFloat(preco_bilhete_input);
+        if (isNaN(preco_bilhete) || preco_bilhete <= 0) {
+            return interaction.editReply("O preço deve ser um número positivo (ex: 1.50).");
+        }
+        const total_bilhetes = parseInt(total_bilhetes_input);
+        if (isNaN(total_bilhetes) || total_bilhetes <= 0) {
+            return interaction.editReply("O total de bilhetes deve ser um número positivo.");
+        }
+        
+        let metodo_sorteio = 'drak';
+        let meta_completude: number | null = null;
+        if (metodo_input_raw.startsWith('loteria')) {
+            metodo_sorteio = 'loteria';
+            const parts = metodo_input_raw.split(':');
+            if (parts.length < 2) return interaction.editReply("Formato inválido. Use 'loteria:75' (para 75% de meta).");
+            meta_completude = parseFloat(parts[1]);
+            if (isNaN(meta_completude) || meta_completude < 1 || meta_completude > 100) {
+                return interaction.editReply("A meta da loteria deve ser um número entre 1 e 100.");
             }
-        });
+            meta_completude = meta_completude / 100.0;
+        } else if (metodo_input_raw !== 'drak') {
+            return interaction.editReply("Método inválido. Use 'drak' ou 'loteria:META'.");
+        }
 
+        let top_compradores_count = 0;
+        const premiosJSON: Premios = {};
+        const premiosBilhete: { qtd: number, desc: string }[] = [];
+        if (premios_secundarios_input) {
+            const lines = premios_secundarios_input.split('\n').filter(line => line.trim().length > 0);
+            for (const line of lines) {
+                const parts = line.split(':');
+                if (parts.length < 2) return interaction.editReply(`Formato inválido nos Prémios. Use 'TIPO: ...'. Linha: "${line}"`);
+                const tipo = parts[0].trim().toUpperCase();
+                const desc = parts.slice(1).join(':').trim();
+                if (tipo.startsWith('TOP')) {
+                    const pos = tipo.replace('TOP', '').trim();
+                    if (pos !== '1' && pos !== '2' && pos !== '3') return interaction.editReply(`Prémio TOP inválido. Use 'TOP 1', 'TOP 2' ou 'TOP 3'. (Erro: ${tipo})`);
+                    premiosJSON[pos] = desc;
+                } 
+                else if (tipo.startsWith('BILHETE')) {
+                    const qtdMatch = tipo.match(/(\d+)X/);
+                    const qtd = qtdMatch ? parseInt(qtdMatch[1]) : 1;
+                    if (isNaN(qtd) || qtd <= 0) return interaction.editReply(`Quantidade de Bilhete Prémio inválida. (Erro: ${tipo})`);
+                    if (qtd > 5) return interaction.editReply("Não pode definir mais de 5 bilhetes premiados do mesmo tipo.");
+                    premiosBilhete.push({ qtd: qtd, desc: desc });
+                }
+                else {
+                    return interaction.editReply(`Tipo de Prémio inválido. Use 'TOP' ou 'BILHETE'. (Erro: ${tipo})`);
+                }
+            }
+            top_compradores_count = Object.keys(premiosJSON).length;
+        }
+        const top_compradores_premios_db = top_compradores_count > 0 ? JSON.stringify(premiosJSON) : null;
+
+        Logger.info(CONTEXT, `Tentando criar rifa '${nome_premio}' no canal ${channel.id}`);
+
+        const newRifa = await prisma.$transaction(async (tx) => {
+            const rifaCriada = await tx.rifa.create({
+                data: {
+                    nome_premio: nome_premio, total_bilhetes: total_bilhetes, status: 'ativa',
+                    metodo_sorteio: metodo_sorteio, meta_completude: meta_completude,
+                    preco_bilhete: preco_bilhete, top_compradores_count: top_compradores_count,
+                    top_compradores_premios: top_compradores_premios_db, sorteio_data: null
+                }
+            });
+            if (premiosBilhete.length > 0) {
+                const padding = String(total_bilhetes - 1).length;
+                const bilhetesSecretosGerados = new Set<string>();
+                for (const premio of premiosBilhete) {
+                    let count = 0;
+                    while(count < premio.qtd) {
+                        const numeroAleatorio = Math.floor(Math.random() * total_bilhetes);
+                        const numeroFormatado = String(numeroAleatorio).padStart(padding, '0');
+                        if (!bilhetesSecretosGerados.has(numeroFormatado)) {
+                            bilhetesSecretosGerados.add(numeroFormatado);
+                            count++;
+                            await tx.premiosInstantaneos.create({
+                                data: {
+                                    id_rifa_fk: rifaCriada.id_rifa,
+                                    numero_bilhete: numeroFormatado,
+                                    descricao_premio: premio.desc
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            return rifaCriada;
+        });
+        
         const messageData = await buildRaffleEmbed(newRifa, 0); 
         const raffleMessage = await channel.send(messageData);
 
@@ -89,9 +157,7 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({ content: 'Ocorreu um erro ao tentar criar a rifa. 😢', ephemeral: true });
         } else {
-            try {
-                await interaction.editReply('Ocorreu um erro ao tentar criar a rifa. 😢');
-            } catch { /* ignore */ }
+            await interaction.editReply('Ocorreu um erro ao tentar criar a rifa. 😢');
         }
     }
 }
