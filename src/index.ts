@@ -2,20 +2,17 @@
 
 import { ExtendedClient } from "./structs/ExtendedClient";
 export * from "colors"; 
-import config from "./config.json";
+// --- REMOVIDO: import config from "./config.json"; ---
 import { startLotteryScheduler } from "./services/LotteryScheduler";
 import { Events } from "discord.js";
-import { Logger } from "./utils/Logger"; // Importa o Logger
+import { Logger } from "./utils/Logger";
 
 const client = new ExtendedClient();
 client.start();
-export { client, config };
+// --- REMOVIDO: export { client, config }; ---
+export { client }; // Apenas exportamos o client
 
 client.once(Events.ClientReady, () => {
-    // Antes:
-    // console.log("Bot is online!".green);
-    
-    // Agora:
     Logger.info("Cliente", "Bot está online e pronto!");
     
     startLotteryScheduler(client);

@@ -4,15 +4,13 @@ import { ModalSubmitInteraction, GuildMember, EmbedBuilder } from "discord.js";
 import { ExtendedClient } from "../structs/ExtendedClient";
 import { prisma } from "../prismaClient";
 import { Logger, LogContext } from "../utils/Logger";
-import { config } from ".."; // Para o Role ID
-import crypto from "crypto"; // Para gerar o código
+// --- REMOVIDO: import { config } from ".."; ---
+import crypto from "crypto"; 
 
 const CONTEXT: LogContext = "Comando";
 const emailRegex = /\S+@\S+\.\S+/;
 
-/**
- * Gera um código de referência único, verificando colisões.
- */
+// ... (Função generateUniqueReferralCode não muda) ...
 async function generateUniqueReferralCode(nome: string): Promise<string> {
     const nomeBase = nome.split(' ')[0].toUpperCase().replace(/[^A-Z]/g, '').substring(0, 5);
     let referralCode = `${nomeBase}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
@@ -60,42 +58,36 @@ export async function processarRegisto(interaction: ModalSubmitInteraction, clie
             }
         });
 
-        const roleId = config.membroRegistadoRoleID;
+        // --- CORREÇÃO AQUI ---
+        const roleId = process.env.MEMBRO_REGISTADO_ROLE_ID; 
         if (!roleId) {
-            Logger.error(CONTEXT, "ERRO CRÍTICO: 'membroRegistadoRoleID' não definido no config.json", null);
+            Logger.error(CONTEXT, "ERRO CRÍTICO: 'MEMBRO_REGISTADO_ROLE_ID' não definida nas variáveis de ambiente.", null);
             return interaction.editReply("Registo salvo, mas ocorreu um erro ao atualizar as suas permissões. Contacte um admin.");
         }
         const member = interaction.member as GuildMember;
         await member.roles.add(roleId);
+        // --- FIM DA CORREÇÃO ---
 
         Logger.info(CONTEXT, `Utilizador ${nome} (${id_discord}) registado com sucesso. Código: ${referralCode}`);
 
-        // --- LÓGICA DE DM ATUALIZADA ---
         const dmEmbed = new EmbedBuilder()
             .setTitle(`🎉 Registo Concluído com Sucesso!`)
             .setDescription(`Bem-vindo(a) ao servidor, **${nome}**!\n\nO seu registo foi efetuado e você já tem acesso a todos os canais.`)
             .addFields({
                 name: "O Seu Código de Indicador Pessoal",
-                // Texto atualizado para refletir as regras de 'gestao.ts' e da sua imagem
                 value: `Guarde este código! Se um amigo o usar numa compra acima de R$ 10,00 (e você também tiver bilhetes nessa rifa), você ganha um bilhete grátis (máximo de 5 por rifa)!`
             })
             .setColor("Green")
             .setTimestamp();
         
         try {
-            // 1. Envia o Embed com a explicação
             await interaction.user.send({ embeds: [dmEmbed] });
-            // 2. Envia o CÓDIGO numa mensagem separada (fácil de copiar no telemóvel)
             await interaction.user.send(referralCode);
-            
-            // 3. Responde na interação original (efémera)
             await interaction.editReply("Registo concluído com sucesso! ✅ Enviei o seu código de indicador para a sua DM.");
         
         } catch (dmError) {
-            // 4. Se falhar (DMs fechadas), envia o código na resposta efémera (Plano B)
             Logger.warn(CONTEXT, `Falha ao enviar DM de registo para ${id_discord}. DMs podem estar fechadas.`, dmError);
             
-            // Mensagem de Plano B melhorada
             const replyContent = `Registo concluído, ${nome}! 🎉\n` +
                 `**Não consegui enviar o seu código por DM!** (As suas DMs podem estar privadas).\n\n` +
                 `Guarde o seu Código de Indicador (toque para copiar):\n` +
@@ -103,7 +95,6 @@ export async function processarRegisto(interaction: ModalSubmitInteraction, clie
 
             await interaction.editReply({ content: replyContent });
         }
-        // --- FIM DA LÓGICA DE DM ---
 
     } catch (err: any) {
         if (err.code === 'P2002') { // Utilizador Duplicado
@@ -112,9 +103,13 @@ export async function processarRegisto(interaction: ModalSubmitInteraction, clie
                 let respostaPublica = 'Parece que você já está registado. Verifiquei as suas permissões! ✅';
                 let dmMessage = "Parece que você já estava registado! Verifiquei as suas permissões no servidor e está tudo certo. ✅";
 
+                // --- CORREÇÃO AQUI ---
+                const roleId = process.env.MEMBRO_REGISTADO_ROLE_ID;
+                // --- FIM DA CORREÇÃO ---
+                
                 const member = interaction.member as GuildMember;
-                if (config.membroRegistadoRoleID) {
-                    await member.roles.add(config.membroRegistadoRoleID);
+                if (roleId) {
+                    await member.roles.add(roleId);
                 }
 
                 const existingUser = await prisma.usuario.findUnique({
@@ -143,19 +138,14 @@ export async function processarRegisto(interaction: ModalSubmitInteraction, clie
                     .setTimestamp();
                 
                 try {
-                    // 1. Envia o Embed
                     await interaction.user.send({ embeds: [dmEmbed] });
-                    // 2. Envia o Código (se existir)
                     if (referralCode) {
                         await interaction.user.send(referralCode);
                     }
-                    // 3. Responde na interação
                     await interaction.editReply(respostaPublica);
-
                 } catch (dmError) {
                     Logger.warn(CONTEXT, `Falha ao enviar DM de "duplicado" para ${id_discord}.`, dmError);
                     
-                    // Plano B melhorado
                     const replyContent = `Parece que você já estava registado!\n` +
                         `**Não consegui enviar os detalhes por DM!** (As suas DMs podem estar privadas).\n\n` +
                         `O seu Código de Indicador é (toque para copiar):\n` +
