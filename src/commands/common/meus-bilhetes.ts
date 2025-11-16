@@ -10,7 +10,7 @@ import { Logger } from "../../utils/Logger"; // Importa o Logger
 
 export default new Command({
     name: "meus-bilhetes",
-    description: "Mostra todos os seus bilhetes e compras de rifas.",
+    description: "Mostra seus bilhetes aprovados de rifas ativas.",
     type: ApplicationCommandType.ChatInput,
     dmPermission: true,
 
@@ -36,27 +36,39 @@ export default new Command({
                 return interaction.editReply("Você não está cadastrado! Use o comando de registo primeiro.");
             }
 
+            // --- ALTERAÇÃO 1: FILTRAGEM NA CONSULTA ---
+            // Adicionado status: 'aprovada' ao 'where'.
+            // Agora, a consulta SÓ retorna compras aprovadas de rifas ativas.
             const compras = await prisma.compras.findMany({
-                where: { id_usuario_fk: id_discord },
+                where: { 
+                    id_usuario_fk: id_discord,
+                    status: 'aprovada', // Apenas compras aprovadas
+                    rifa: {
+                        status: { in: ['ativa', 'aguardando_sorteio'] } // Apenas rifas ativas
+                    }
+                },
                 include: {
                     rifa: true,
-                    bilhetes: true
+                    bilhetes: true // Inclui os bilhetes de cada compra
                 },
                 orderBy: [
                     { rifa: { id_rifa: 'desc' } },
-                    { data_compra: 'desc' }
+                    { data_compra: 'asc' }
                 ]
             });
 
             if (compras.length === 0) {
-                return interaction.editReply("Você ainda não fez nenhuma compra de rifa.");
+                return interaction.editReply("Você não possui bilhetes aprovados para rifas ativas no momento.");
             }
 
             const embed = new EmbedBuilder()
-                .setTitle(`Minhas Compras e Bilhetes`)
+                .setTitle(`Minhas Rifas Ativas`)
                 .setColor("Blue")
-                .setDescription("Aqui está um resumo de todas as suas atividades de rifa.");
+                .setDescription("Aqui está um resumo dos seus bilhetes aprovados para rifas em andamento.");
 
+            // --- ALTERAÇÃO 2: LÓGICA DE AGRUPAMENTO SIMPLIFICADA ---
+
+            // 1. Agrupar as compras por ID da rifa
             const rifasAgrupadas: Record<number, typeof compras> = {};
             for (const compra of compras) {
                 if (!rifasAgrupadas[compra.id_rifa_fk]) {
@@ -65,33 +77,41 @@ export default new Command({
                 rifasAgrupadas[compra.id_rifa_fk].push(compra);
             }
 
+            // 2. Iterar sobre cada Rifa agrupada
             for (const rifaId in rifasAgrupadas) {
                 const comprasDaRifa = rifasAgrupadas[rifaId];
-                const nomePremio = comprasDaRifa[0].rifa.nome_premio; 
+                const rifa = comprasDaRifa[0].rifa; // Pegar detalhes da rifa
                 
+                const bilhetesAprovados: string[] = [];
+
+                // 3. Coletar todos os bilhetes
+                // (Não precisamos mais verificar o status, pois a consulta já filtrou)
+                for (const compra of comprasDaRifa) {
+                    bilhetesAprovados.push(...compra.bilhetes.map(b => b.numero_bilhete));
+                }
+
+                // 4. Construir o campo de valor para o Embed
                 let campoValor = "";
 
-                for (const compra of comprasDaRifa) {
-                    const data = new Date(compra.data_compra).toLocaleDateString('pt-BR');
-                    
-                    if (compra.status === 'aprovada') {
-                        const numeros = compra.bilhetes.map(b => b.numero_bilhete).join(', ');
-                        campoValor += `✅ **Aprovada** (ID: \`${compra.id_compra}\`) - ${compra.quantidade} bilhete(s)\n`;
-                        campoValor += `> \`\`\`${numeros || 'Nenhum bilhete encontrado'}\`\`\`\n`;
-                    } else if (compra.status === 'em_analise') {
-                        campoValor += `⌛ **Em Análise** (ID: \`${compra.id_compra}\`) - ${compra.quantidade} bilhete(s)\n`;
-                    } else if (compra.status === 'rejeitada') {
-                        campoValor += `❌ **Rejeitada** (ID: \`${compra.id_compra}\`) - ${compra.quantidade} bilhete(s) - ${data}\n`;
-                    }
+                if (bilhetesAprovados.length > 0) {
+                    bilhetesAprovados.sort(); // Opcional: ordenar os bilhetes
+                    campoValor += `✅ **Total Aprovado:** ${bilhetesAprovados.length} bilhete(s)\n`;
+                    campoValor += `> \`\`\`${bilhetesAprovados.join(', ')}\`\`\`\n`;
+                } else {
+                     // Este bloco agora é redundante, mas serve como segurança
+                    campoValor = "Nenhum bilhete aprovado encontrado para esta rifa.";
                 }
                 
-                embed.addFields({ name: `Rifa #${rifaId}: ${nomePremio}`, value: campoValor });
+                // 5. Adicionar ao Embed
+                embed.addFields({ 
+                    name: `Rifa #${rifaId}: ${rifa.nome_premio} (${rifa.status.toUpperCase()})`, 
+                    value: campoValor 
+                });
             }
             
             await interaction.editReply({ embeds: [embed] });
 
         } catch (error: any) {
-            // Log com Logger
             Logger.error("Comando", `Erro ao executar /meus-bilhetes para ${id_discord}`, error);
             await interaction.editReply("Ocorreu um erro inesperado ao buscar suas compras. 😢");
         }
