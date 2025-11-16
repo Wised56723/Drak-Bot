@@ -78,6 +78,7 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             throw new Error(`Excede o total! (${vendidos} + ${compra.quantidade} > ${rifa.total_bilhetes} total)`);
         }
 
+        // 1. Cria a lista de todos os bilhetes disponíveis
         const availableTickets: string[] = [];
         for (let i = 0; i < rifa.total_bilhetes; i++) {
             const numeroBilhete = String(i).padStart(padding, '0');
@@ -86,36 +87,29 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             }
         }
 
+        // 2. Embaralha a lista de disponíveis (Fisher-Yates)
         for (let i = availableTickets.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [availableTickets[i], availableTickets[j]] = [availableTickets[j], availableTickets[i]];
         }
 
-        // --- CORREÇÃO: Tipo 'novosNumeros' definido explicitamente ---
-        let novosNumeros: string[] = [];
-        const availableBonusTickets: string[] = [];
-        const availablePrizeTickets: string[] = [];
-        
-        availableTickets.forEach((num: string) => {
-            if (secretPrizeSet.has(num)) {
-                availablePrizeTickets.push(num);
-            } else {
-                availableBonusTickets.push(num);
-            }
-        });
+        // --- INÍCIO DA REATORAÇÃO (CORREÇÃO DO BUG) ---
+        //
+        // O bug anterior separava os bilhetes premiados dos não-premiados e priorizava
+        // a venda dos não-premiados.
+        //
+        // A lógica correta é simplesmente pegar os 'X' primeiros bilhetes da lista
+        // que já foi embaralhada, garantindo aleatoriedade total.
 
-        if (availableBonusTickets.length < compra.quantidade) {
-            const needed = compra.quantidade - availableBonusTickets.length;
-            const extraPrizeTickets = availablePrizeTickets.slice(0, needed);
-            novosNumeros = [...availableBonusTickets, ...extraPrizeTickets];
-        } else {
-            novosNumeros = availableBonusTickets.slice(0, compra.quantidade);
+        if (availableTickets.length < compra.quantidade) {
+            // Verificação de segurança caso a validação anterior falhe em um cenário de concorrência
+            throw new Error(`Concorrência: Bilhetes disponíveis (${availableTickets.length}) é menor que a quantidade pedida (${compra.quantidade}).`);
         }
         
-        for (let i = novosNumeros.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [novosNumeros[i], novosNumeros[j]] = [novosNumeros[j], novosNumeros[i]];
-        }
+        // 3. Seleciona os bilhetes diretamente da pool embaralhada
+        let novosNumeros: string[] = availableTickets.slice(0, compra.quantidade);
+
+        // --- FIM DA REATORAÇÃO ---
 
         await tx.compras.update({
             where: { id_compra: id_compra },
@@ -130,11 +124,13 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             }))
         });
 
+        // 4. Verifica se *entre os bilhetes selecionados* havia algum premiado
         const premiosGanhos: { numero: string, premio: string }[] = [];
         const premiosPendentes = await tx.premiosInstantaneos.findMany({
             where: {
                 id_rifa_fk: compra.id_rifa_fk,
                 status: 'pendente',
+                // A query verifica apenas os números que acabaram de ser selecionados
                 numero_bilhete: { in: novosNumeros } 
             }
         });
@@ -152,7 +148,7 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
         
         novosNumeros.forEach((n: string) => soldTicketSet.add(n));
 
-        // bonusMessage é definida no escopo externo
+        // 5. Lógica de Bônus (Indicador)
         bonusMessage = "";
         const totalPreco = compra.quantidade * rifa.preco_bilhete;
         
@@ -165,6 +161,7 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             });
 
             if (freeTicketsCount < 5) {
+                // Cria uma pool de bônus (não pode ser premiado)
                 const availableForBonus: string[] = [];
                 for (let i = 0; i < rifa.total_bilhetes; i++) {
                     const num = String(i).padStart(padding, '0');
@@ -204,16 +201,16 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
         return { novosNumeros, premiosGanhos, compra, bonusMessage };
 
     }, {
-       // Configuração da transação (opcional, mas bom para concorrência)
+       // Configuração da transação
        maxWait: 5000, 
        timeout: 10000,
        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
 
-    // --- CORREÇÃO: Lógica de DM e 'respostaAdmin' movida para cá ---
+    // --- Lógica Pós-Transação (DMs e Respostas) ---
+
     try {
         const user = await client.users.fetch(compra.id_usuario_fk);
-        // --- CORREÇÃO: 'dmEmbed' definido aqui ---
         const dmEmbed = new EmbedBuilder()
             .setTitle(`✅ Compra Aprovada (Rifa #${compra.id_rifa_fk})`)
             .setDescription(`Sua compra de **${compra.quantidade} bilhete(s)** foi aprovada!`)
@@ -247,7 +244,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     await updateRaffleMessage(client, compra.id_rifa_fk);
 
-    // --- CORREÇÃO: 'respostaAdmin' definida aqui ---
     let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>, ${novosNumeros.join(', ')})`;
     if (premiosGanhos.length > 0) {
         const premioTxt = premiosGanhos.map((p: { numero: string, premio: string }) => `Bilhete \`${p.numero}\` ganhou **${p.premio}**`).join(', ');
@@ -269,7 +265,6 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
     Logger.info(CONTEXT, `Iniciando rejeição da compra #${id_compra}...`);
     
     const compra = await prisma.compras.findUnique({
-        // --- CORREÇÃO: Adicionado o 'where' que faltava ---
         where: { id_compra: id_compra },
         select: {
             id_compra: true,
@@ -290,7 +285,6 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
 
     try {
         const user = await client.users.fetch(compra.id_usuario_fk);
-        // --- CORREÇÃO: 'dmEmbed' definido aqui ---
         const dmEmbed = new EmbedBuilder()
             .setTitle(`❌ Compra Rejeitada (Rifa #${compra.id_rifa_fk})`)
             .setDescription(`Sua compra (ID: \`${id_compra}\`) de **${compra.quantidade} bilhete(s)** foi rejeitada.`)
