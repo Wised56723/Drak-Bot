@@ -243,6 +243,171 @@ export async function processarCompraRifa(interaction: ModalSubmitInteraction, c
 
 
 // ... (As outras funções não mudam) ...
-export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, interaction: ChatInputCommandInteraction) { /* ... */ }
-export async function cancelarRifa(id_rifa: number, motivo: string, client: ExtendedClient, interaction: ChatInputCommandInteraction) { /* ... */ }
-export async function finalizarRifaLoteria(id_rifa: number, numero_sorteado_input: string, client: ExtendedClient, interaction: ChatInputCommandInteraction) { /* ... */ }
+export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
+    await interaction.deferReply({ ephemeral: true });
+    
+    try {
+        Logger.info(CONTEXT, `Tentando sortear (drak) rifa #${id_rifa}`);
+        const rifa: Rifa | null = await getRifaById(id_rifa);
+        if (!rifa) throw new Error("Rifa não encontrada.");
+        if (rifa.status !== 'ativa') throw new Error("Esta rifa não está ativa.");
+        if (rifa.metodo_sorteio !== 'drak') throw new Error("Esta rifa não usa o método de sorteio 'drak'.");
+
+        const totalBilhetesVendidos = await prisma.bilhetes.count({
+            where: { compra: { id_rifa_fk: id_rifa, status: 'aprovada' } }
+        });
+        if (totalBilhetesVendidos === 0) {
+            throw new Error("Nenhum bilhete 'aprovado' foi encontrado nesta rifa para sortear.");
+        }
+        const skip = Math.floor(Math.random() * totalBilhetesVendidos);
+        const bilheteVencedor = await prisma.bilhetes.findFirst({
+            where: { compra: { id_rifa_fk: id_rifa, status: 'aprovada' } },
+            skip: skip,
+            include: {
+                compra: { include: { usuario: true } }
+            }
+        });
+        if (!bilheteVencedor || !bilheteVencedor.compra || !bilheteVencedor.compra.usuario) {
+            throw new Error("Falha ao selecionar um bilhete vencedor e encontrar o seu dono.");
+        }
+        const vencedor: Vencedor = {
+            numero_bilhete: bilheteVencedor.numero_bilhete,
+            id_discord: bilheteVencedor.compra.usuario.id_discord,
+            nome: bilheteVencedor.compra.usuario.nome
+        };
+
+        await prisma.rifa.update({
+            where: { id_rifa: id_rifa },
+            data: { status: 'finalizada' }
+        });
+        rifa.status = 'finalizada'; 
+
+        if (rifa.channel_id && rifa.message_id) {
+            try {
+                const channel = await client.channels.fetch(rifa.channel_id) as TextChannel;
+                const message = await channel.messages.fetch(rifa.message_id);
+                const winnerData = await buildRaffleWinnerEmbed(rifa, vencedor); 
+                await message.edit(winnerData); 
+            } catch (msgError) { 
+                Logger.error(CONTEXT, `Erro ao atualizar msg pública (sortear #${id_rifa})`, msgError);
+            }
+        }
+        
+        Logger.info(CONTEXT, `Rifa #${id_rifa} sorteada (drak). Vencedor: ${vencedor.nome}`);
+        await interaction.editReply(`🎉 Sorteio Realizado com Sucesso! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
+    } catch (error: any) {
+        Logger.error(CONTEXT, `Erro ao sortear (drak) rifa #${id_rifa}`, error);
+        await interaction.editReply(`❌ Erro ao sortear: ${error.message}`);
+    }
+}
+
+// ... (A função 'cancelarRifa' não muda) ...
+export async function cancelarRifa(id_rifa: number, motivo: string, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+        Logger.info(CONTEXT, `Tentando cancelar rifa #${id_rifa}. Motivo: ${motivo}`);
+        const rifa: Rifa | null = await getRifaById(id_rifa);
+        if (!rifa) throw new Error("Rifa não encontrada.");
+        if (rifa.status !== 'ativa') throw new Error(`Esta rifa não pode ser cancelada (Status atual: '${rifa.status}').`);
+        
+        await prisma.rifa.update({
+            where: { id_rifa: id_rifa },
+            data: { status: 'cancelada' }
+        });
+
+        if (rifa.channel_id && rifa.message_id) {
+            try {
+                const channel = await client.channels.fetch(rifa.channel_id) as TextChannel;
+                const message = await channel.messages.fetch(rifa.message_id);
+                const cancelledData = buildRaffleCancelledEmbed(rifa, motivo);
+                await message.edit(cancelledData); 
+            } catch (msgError) { 
+                Logger.error(CONTEXT, `Erro ao atualizar msg pública (cancelar #${id_rifa})`, msgError);
+            }
+        }
+        
+        Logger.info(CONTEXT, `Rifa #${id_rifa} cancelada.`);
+        await interaction.editReply(`🗑️ Rifa #${id_rifa} cancelada com sucesso.`);
+    } catch (error: any) {
+        Logger.error(CONTEXT, `Erro ao cancelar rifa #${id_rifa}`, error);
+        await interaction.editReply(`❌ Erro ao cancelar: ${error.message}`);
+    }
+}
+
+
+// ... (A função 'getLotteryWinnerNumber' não muda) ...
+function getLotteryWinnerNumber(totalBilhetes: number, numeroSorteado: string): string {
+    let requiredLength = String(totalBilhetes - 1).length;
+    const winnerNumber = numeroSorteado.slice(-requiredLength);
+    return winnerNumber.padStart(requiredLength, '0');
+}
+
+// ... (A função 'finalizarRifaLoteria' não muda) ...
+export async function finalizarRifaLoteria(id_rifa: number, numero_sorteado_input: string, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    if (!/^\d+$/.test(numero_sorteado_input)) { 
+        return interaction.editReply("O número sorteado deve conter apenas dígitos."); 
+    }
+    
+    try {
+        Logger.info(CONTEXT, `Tentando finalizar (loteria) rifa #${id_rifa} com o número ${numero_sorteado_input}`);
+        const rifa: Rifa | null = await getRifaById(id_rifa);
+        if (!rifa) throw new Error("Rifa não encontrada.");
+        if (rifa.metodo_sorteio !== 'loteria') throw new Error("Esta rifa não é do método 'loteria'.");
+        if (rifa.status !== 'aguardando_sorteio') throw new Error(`Esta rifa não está 'aguardando_sorteio' (Status: ${rifa.status}).`);
+
+        const bilheteVencedorStr = getLotteryWinnerNumber(rifa.total_bilhetes, numero_sorteado_input);
+        const bilheteVencedor = await prisma.bilhetes.findFirst({
+            where: {
+                compra: { id_rifa_fk: id_rifa, status: 'aprovada' },
+                numero_bilhete: bilheteVencedorStr
+            },
+            include: {
+                compra: { include: { usuario: true } }
+            }
+        });
+
+        if (!bilheteVencedor || !bilheteVencedor.compra || !bilheteVencedor.compra.usuario) {
+            await prisma.rifa.update({
+                where: { id_rifa: id_rifa },
+                data: { status: 'finalizada' }
+            });
+            Logger.info(CONTEXT, `Sorteio (loteria) rifa #${id_rifa} finalizado. Bilhete ${bilheteVencedorStr} não foi vendido.`);
+            await interaction.editReply(`ℹ️ Sorteio da Loteria Registrado! Bilhete ${bilheteVencedorStr} não foi vendido.`);
+            return; 
+        }
+
+        const vencedor: Vencedor = {
+            numero_bilhete: bilheteVencedor.numero_bilhete,
+            id_discord: bilheteVencedor.compra.usuario.id_discord,
+            nome: bilheteVencedor.compra.usuario.nome
+        };
+
+        await prisma.rifa.update({
+            where: { id_rifa: id_rifa },
+            data: { status: 'finalizada' }
+        });
+        rifa.status = 'finalizada'; 
+
+        if (rifa.channel_id && rifa.message_id) {
+            try {
+                const channel = await client.channels.fetch(rifa.channel_id) as TextChannel;
+                const message = await channel.messages.fetch(rifa.message_id);
+                const winnerData = await buildRaffleWinnerEmbed(rifa, vencedor); 
+                await message.edit(winnerData); 
+            } catch (msgError) { 
+                Logger.error(CONTEXT, `Erro ao atualizar msg pública (finalizar-loteria #${id_rifa})`, msgError);
+            }
+        }
+        
+        Logger.info(CONTEXT, `Rifa #${id_rifa} finalizada (loteria). Vencedor: ${vencedor.nome}`);
+        await interaction.editReply(`🎉 Sorteio da Loteria Finalizado! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
+    } catch (error: any) {
+        Logger.error(CONTEXT, `Erro ao finalizar (loteria) rifa #${id_rifa}`, error);
+        await interaction.editReply(`❌ Erro ao finalizar: ${error.message}`);
+    }
+}
+
+
