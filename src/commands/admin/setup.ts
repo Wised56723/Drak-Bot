@@ -11,7 +11,6 @@ import {
 import { Command } from "../../structs/types/Command";
 import { prisma } from "../../prismaClient";
 import { ExtendedClient } from "../../structs/ExtendedClient";
-import { config } from "../..";
 
 // --- IMPORTA O NOVO SERVICE ---
 import { processarRegisto } from "../../services/SetupService"; // Ajuste o caminho se necessário
