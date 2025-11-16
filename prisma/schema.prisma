@@ -1,28 +1,33 @@
-// ... (datasource e generator não mudam) ...
-datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
-}
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// ... (bloco 'generator client' não muda) ...
 generator client {
   provider = "prisma-client-js"
 }
+
+// --- ALTERAÇÃO AQUI ---
+// Mudamos o 'provider' de "sqlite" para "postgresql"
+// Isto prepara o bot para se conectar a uma base de dados real na Railway.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+// --- FIM DA ALTERAÇÃO ---
 
 model Usuario {
   id_discord String   @id
   nome       String
   email      String   @unique
   
-  // --- NOVO CAMPO ---
-  referral_code String?  @unique // Ex: LUIS-A1B2
+  referral_code String? @unique 
   
-  // Relações
   compras             Compras[]
   premios_instantaneos PremiosInstantaneos[]
-  indicacoes_feitas   Compras[]             @relation("Indicador") // Relação para as compras que ele indicou
+  indicacoes_feitas   Compras[]             @relation("Indicador")
 }
 
 model Rifa {
-  // ... (campos da rifa não mudam) ...
   id_rifa           Int       @id @default(autoincrement())
   nome_premio       String
   total_bilhetes    Int
@@ -36,7 +41,6 @@ model Rifa {
   top_compradores_count   Int     @default(0)
   top_compradores_premios String?
   
-  // Relações
   compras             Compras[]
   premios_instantaneos PremiosInstantaneos[]
 }
@@ -48,40 +52,32 @@ model Compras {
   data_compra   DateTime
   quantidade    Int
   status        String   @default("em_analise")
-
-  // --- NOVO CAMPO ---
-  // Armazena o ID do utilizador que indicou esta compra
   id_indicador_fk String?
-  
-  // Relações
+
   rifa      Rifa      @relation(fields: [id_rifa_fk], references: [id_rifa])
   usuario   Usuario   @relation(fields: [id_usuario_fk], references: [id_discord])
   bilhetes  Bilhetes[]
   
-  // --- NOVA RELAÇÃO ---
-  indicador Usuario?  @relation("Indicador", fields: [id_indicador_fk], references: [id_discord])
+  indicador Usuario? @relation("Indicador", fields: [id_indicador_fk], references: [id_discord])
 }
 
 model Bilhetes {
   id_bilhete     Int    @id @default(autoincrement())
   id_compra_fk   Int
   numero_bilhete String
-
-  // --- NOVO CAMPO ---
-  is_free Boolean @default(false)
+  is_free        Boolean @default(false)
   
-  // Relações
   compra Compras @relation(fields: [id_compra_fk], references: [id_compra], onDelete: Cascade)
 }
 
 model PremiosInstantaneos {
-  // ... (tabela de prémios não muda) ...
   id_premio                Int      @id @default(autoincrement())
   id_rifa_fk               Int
   numero_bilhete           String
   descricao_premio         String
   status                   String   @default("pendente")
   id_usuario_vencedor_fk   String?
+  
   rifa     Rifa     @relation(fields: [id_rifa_fk], references: [id_rifa], onDelete: Cascade)
   usuario  Usuario? @relation(fields: [id_usuario_vencedor_fk], references: [id_discord])
 }
