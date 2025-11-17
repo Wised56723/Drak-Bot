@@ -10,7 +10,8 @@ import { Logger } from "../../utils/Logger"; // Importa o Logger
 
 export default new Command({
     name: "meus-bilhetes",
-    description: "Mostra seus bilhetes aprovados de rifas ativas.",
+    // Descrição atualizada
+    description: "Mostra um resumo de quantos bilhetes você possui em rifas ativas.",
     type: ApplicationCommandType.ChatInput,
     dmPermission: true,
 
@@ -36,78 +37,59 @@ export default new Command({
                 return interaction.editReply("Você não está cadastrado! Use o comando de registo primeiro.");
             }
 
-            // --- ALTERAÇÃO 1: FILTRAGEM NA CONSULTA ---
-            // Adicionado status: 'aprovada' ao 'where'.
-            // Agora, a consulta SÓ retorna compras aprovadas de rifas ativas.
-            const compras = await prisma.compras.findMany({
-                where: { 
+            // --- INÍCIO DA REATORAÇÃO ---
+
+            // 1. Usamos 'groupBy' para agregar a contagem de bilhetes por rifa.
+            //    Isto é muito mais eficiente do que carregar todos os bilhetes.
+            const bilhetesAgregados = await prisma.compras.groupBy({
+                by: ['id_rifa_fk'], // Agrupar por rifa
+                where: {
                     id_usuario_fk: id_discord,
-                    status: 'aprovada', // Apenas compras aprovadas
+                    status: 'aprovada',
                     rifa: {
-                        status: { in: ['ativa', 'aguardando_sorteio'] } // Apenas rifas ativas
+                        status: { in: ['ativa', 'aguardando_sorteio'] }
                     }
                 },
-                include: {
-                    rifa: true,
-                    bilhetes: true // Inclui os bilhetes de cada compra
-                },
-                orderBy: [
-                    { rifa: { id_rifa: 'desc' } },
-                    { data_compra: 'asc' }
-                ]
+                // Soma a 'quantidade' de todas as compras aprovadas para cada rifa
+                _sum: {
+                    quantidade: true
+                }
             });
 
-            if (compras.length === 0) {
+            if (bilhetesAgregados.length === 0) {
                 return interaction.editReply("Você não possui bilhetes aprovados para rifas ativas no momento.");
             }
 
+            // 2. Buscar os nomes e status das rifas encontradas
+            const rifaIds = bilhetesAgregados.map(a => a.id_rifa_fk);
+            const rifas = await prisma.rifa.findMany({
+                where: { id_rifa: { in: rifaIds } },
+                select: { id_rifa: true, nome_premio: true, status: true }
+            });
+            // Mapear para fácil acesso
+            const rifaMap = new Map(rifas.map(r => [r.id_rifa, r]));
+
+
+            // 3. Construir o Embed com o sumário
             const embed = new EmbedBuilder()
                 .setTitle(`Minhas Rifas Ativas`)
                 .setColor("Blue")
                 .setDescription("Aqui está um resumo dos seus bilhetes aprovados para rifas em andamento.");
 
-            // --- ALTERAÇÃO 2: LÓGICA DE AGRUPAMENTO SIMPLIFICADA ---
+            for (const agregado of bilhetesAgregados) {
+                const rifa = rifaMap.get(agregado.id_rifa_fk);
+                const totalBilhetes = agregado._sum.quantidade || 0; // Total de bilhetes
 
-            // 1. Agrupar as compras por ID da rifa
-            const rifasAgrupadas: Record<number, typeof compras> = {};
-            for (const compra of compras) {
-                if (!rifasAgrupadas[compra.id_rifa_fk]) {
-                    rifasAgrupadas[compra.id_rifa_fk] = [];
+                if (rifa && totalBilhetes > 0) {
+                    // Adiciona um campo para cada rifa, mostrando apenas a contagem
+                    embed.addFields({
+                        name: `Rifa #${rifa.id_rifa}: ${rifa.nome_premio} (${rifa.status.toUpperCase()})`,
+                        value: `✅ Você possui **${totalBilhetes}** bilhete(s) aprovado(s) nesta rifa.`
+                    });
                 }
-                rifasAgrupadas[compra.id_rifa_fk].push(compra);
             }
-
-            // 2. Iterar sobre cada Rifa agrupada
-            for (const rifaId in rifasAgrupadas) {
-                const comprasDaRifa = rifasAgrupadas[rifaId];
-                const rifa = comprasDaRifa[0].rifa; // Pegar detalhes da rifa
-                
-                const bilhetesAprovados: string[] = [];
-
-                // 3. Coletar todos os bilhetes
-                // (Não precisamos mais verificar o status, pois a consulta já filtrou)
-                for (const compra of comprasDaRifa) {
-                    bilhetesAprovados.push(...compra.bilhetes.map(b => b.numero_bilhete));
-                }
-
-                // 4. Construir o campo de valor para o Embed
-                let campoValor = "";
-
-                if (bilhetesAprovados.length > 0) {
-                    bilhetesAprovados.sort(); // Opcional: ordenar os bilhetes
-                    campoValor += `✅ **Total Aprovado:** ${bilhetesAprovados.length} bilhete(s)\n`;
-                    campoValor += `> \`\`\`${bilhetesAprovados.join(', ')}\`\`\`\n`;
-                } else {
-                     // Este bloco agora é redundante, mas serve como segurança
-                    campoValor = "Nenhum bilhete aprovado encontrado para esta rifa.";
-                }
-                
-                // 5. Adicionar ao Embed
-                embed.addFields({ 
-                    name: `Rifa #${rifaId}: ${rifa.nome_premio} (${rifa.status.toUpperCase()})`, 
-                    value: campoValor 
-                });
-            }
+            
+            // --- FIM DA REATORAÇÃO ---
             
             await interaction.editReply({ embeds: [embed] });
 

@@ -5,10 +5,10 @@ import {
   TextChannel,
   EmbedBuilder,
   ActionRowBuilder,
-  ButtonBuilder,
+  ButtonBuilder, // Corrigido (importação já estava correta)
   ButtonStyle,
   ChatInputCommandInteraction,
-  DMChannel // Importado para tipagem se necessário
+  DMChannel 
 } from "discord.js";
 import { ExtendedClient } from "../structs/ExtendedClient";
 import { prisma } from "../prismaClient";
@@ -28,30 +28,17 @@ import { PIX } from "gpix/dist";
 
 const CONTEXT: LogContext = "RifaService";
 
-/**
- * Utility: Fisher–Yates shuffle in-place
- */
+// ... (Funções shuffleInPlace, formatTicketNumber, criarRifa - SEM ALTERAÇÕES) ...
 function shuffleInPlace<T>(arr: T[]): void {
-    // (Código Omitido - Sem Alterações)
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
 }
-
-/**
- * Utility: pad ticket number as string with zeros to match padding.
- */
 function formatTicketNumber(num: number, padding: number): string {
-    // (Código Omitido - Sem Alterações)
-    return String(num).padStart(padding, "0");
+  return String(num).padStart(padding, "0");
 }
-
-/**
- * Create raffle (criarRifa)
- */
 export async function criarRifa(interaction: ModalSubmitInteraction, client: ExtendedClient) {
-    // (Esta função não foi alterada)
     if (!interaction.inGuild()) return;
     await interaction.deferReply({ ephemeral: true });
 
@@ -77,7 +64,6 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
             return interaction.editReply("O total de bilhetes deve ser um número positivo.");
         }
 
-        // Metodo e meta
         let metodo_sorteio: "drak" | "loteria" = "drak";
         let meta_completude: number | null = null;
         if (metodo_input_raw.startsWith("loteria")) {
@@ -93,7 +79,6 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
             return interaction.editReply("Método inválido. Use 'drak' ou 'loteria:META'.");
         }
 
-        // Parse premios secundários
         let top_compradores_count = 0;
         const premiosJSON: Premios = {};
         const premiosBilhete: { qtd: number; desc: string }[] = [];
@@ -126,7 +111,6 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
 
         Logger.info(CONTEXT, `Tentando criar rifa '${nome_premio}' no canal ${channel.id}`);
 
-        // Persist raffle + instant prizes in transaction.
         const newRifa = await prisma.$transaction(async (tx) => {
             const rifaCriada = await tx.rifa.create({
                 data: {
@@ -142,21 +126,17 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
                 }
             });
 
-            // If instant-ticket prizes requested, generate them by shuffling the pool of ticket numbers
             if (premiosBilhete.length > 0) {
                 const totalPremios = premiosBilhete.reduce((s, p) => s + p.qtd, 0);
                 const padding = String(total_bilhetes - 1).length;
 
-                // Build array 0..total_bilhetes-1
                 const pool: number[] = Array.from({ length: total_bilhetes }, (_, i) => i);
-                shuffleInPlace(pool); // O(total_bilhetes)
+                shuffleInPlace(pool); 
 
-                // We'll consume the first N items from pool to create distinct prize tickets
                 let poolIndex = 0;
                 for (const premio of premiosBilhete) {
                     for (let i = 0; i < premio.qtd; i++) {
                         if (poolIndex >= pool.length) {
-                            // This should not happen, but guard just in case.
                             throw new Error("Pool de bilhetes esgotado ao gerar prémios instantâneos.");
                         }
                         const numero = pool[poolIndex++];
@@ -175,7 +155,6 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
             return rifaCriada;
         });
 
-        // Post embed and update message info
         const messageData = await buildRaffleEmbed(newRifa, 0);
         const raffleMessage = await channel.send(messageData);
         await prisma.rifa.update({
@@ -187,7 +166,7 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
         await interaction.editReply(
             `🎉 Rifa criada com sucesso!\n(Prémios Top e Bilhetes Secretos foram configurados).\nA mensagem de acompanhamento foi postada em ${channel}.`
         );
-  } catch (err: any) {
+    } catch (err: any) {
         Logger.error(CONTEXT, "Erro ao criar rifa (modal-rifa-criar_)", err);
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({ content: "Ocorreu um erro ao tentar criar a rifa. 😢", ephemeral: true });
@@ -196,330 +175,379 @@ export async function criarRifa(interaction: ModalSubmitInteraction, client: Ext
                 await interaction.editReply("Ocorreu um erro ao tentar criar a rifa. 😢");
             } catch { /* ignore */ }
         }
-  }
+    }
 }
-
-/**
- * PROCESSAR COMPRA
- * Alterado para enviar a mensagem de rastreamento na DM e salvar os IDs da DM.
- */
 export async function processarCompraRifa(interaction: ModalSubmitInteraction, client: ExtendedClient) {
-  
-  // --- MUDANÇA 1: deferReply agora é EFÊMERO ---
-  await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
 
-  const [, rifaIdStr] = interaction.customId.split("_");
-  const id_rifa = parseInt(rifaIdStr);
-  const id_discord = interaction.user.id;
-  const quantidade_input = interaction.fields.getTextInputValue("buy-modal-quantidade");
-  const quantidade = parseInt(quantidade_input);
-  const referral_code_input = interaction.fields.getTextInputValue("referral-code")?.toUpperCase() || null;
+    const [, rifaIdStr] = interaction.customId.split("_");
+    const id_rifa = parseInt(rifaIdStr);
+    const id_discord = interaction.user.id;
+    const quantidade_input = interaction.fields.getTextInputValue("buy-modal-quantidade");
+    const quantidade = parseInt(quantidade_input);
+    const referral_code_input = interaction.fields.getTextInputValue("referral-code")?.toUpperCase() || null;
 
-  if (isNaN(id_rifa)) {
-    Logger.warn(CONTEXT, `ID de rifa inválido no modal 'buy-modal_': ${rifaIdStr}`);
-    return interaction.editReply("Erro: ID da rifa inválido.");
-  }
-  if (isNaN(quantidade) || quantidade <= 0) {
-    return interaction.editReply("A quantidade deve ser um número positivo.");
-  }
-
-  // --- MUDANÇA 2: Variáveis para armazenar os IDs da mensagem de DM ---
-  let dmMessageId: string | null = null;
-  let dmChannelId: string | null = null;
-
-  try {
-    const usuario = await prisma.usuario.findUnique({ where: { id_discord: id_discord } });
-    if (!usuario) {
-      return interaction.editReply("Você não está registado! Use o botão de registo no canal de boas-vindas primeiro.");
+    if (isNaN(id_rifa)) {
+        Logger.warn(CONTEXT, `ID de rifa inválido no modal 'buy-modal_': ${rifaIdStr}`);
+        return interaction.editReply("Erro: ID da rifa inválido.");
+    }
+    if (isNaN(quantidade) || quantidade <= 0) {
+        return interaction.editReply("A quantidade deve ser um número positivo.");
     }
 
-    let id_indicador: string | null = null;
-    if (referral_code_input) {
-      if (usuario.referral_code === referral_code_input) {
-        return interaction.editReply("Você não pode usar o seu próprio código de indicador!");
-      }
-      const indicador = await prisma.usuario.findUnique({ where: { referral_code: referral_code_input } });
-      if (!indicador) {
-        return interaction.editReply("Esse código de indicador não foi encontrado.");
-      }
-      id_indicador = indicador.id_discord;
-    }
-
-    const rifa = await prisma.rifa.findUnique({ where: { id_rifa: id_rifa } });
-    if (!rifa) {
-      Logger.warn(CONTEXT, `Rifa #${id_rifa} não encontrada (processarCompraRifa)`);
-      return interaction.editReply("Erro: Rifa não encontrada.");
-    }
-    if (rifa.status !== "ativa" && rifa.status !== "aguardando_sorteio") {
-      return interaction.editReply(`A rifa "${rifa.nome_premio}" não está aceitando compras.`);
-    }
-
-    const reservados = await countBilhetesReservados(id_rifa);
-    const disponiveis = rifa.total_bilhetes - reservados;
-    if (quantidade > disponiveis) {
-      return interaction.editReply(
-        `Bilhetes insuficientes. Tentou comprar: **${quantidade}** / Disponíveis: **${disponiveis}**`
-      );
-    }
-
-    Logger.info(
-      CONTEXT,
-      `Processando compra: Rifa #${id_rifa}, User: ${id_discord}, Qtd: ${quantidade}, Indicador: ${id_indicador || "Nenhum"}`
-    );
-
-    const newCompra = await prisma.compras.create({
-      data: {
-        id_rifa_fk: id_rifa,
-        id_usuario_fk: id_discord,
-        data_compra: new Date(),
-        quantidade: quantidade,
-        status: "em_analise",
-        id_indicador_fk: id_indicador
-        // Os IDs da DM serão adicionados abaixo
-      }
-    });
-    const newCompraId = newCompra.id_compra;
-
-    const totalPreco = quantidade * rifa.preco_bilhete;
-    const totalPrecoString = totalPreco.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    let pixCode = "";
+    let dmMessageId: string | null = null;
+    let dmChannelId: string | null = null;
 
     try {
-      const safeTxid = String(newCompraId).replace(/[^a-zA-Z0-9]/g, "").substring(0, 25);
-      const pix = PIX.static()
-        .setReceiverName(process.env.PIX_MERCHANT_NAME)
-        .setReceiverCity(process.env.PIX_MERCHANT_CITY)
-        .setKey(process.env.PIX_KEY)
-        .setAmount(totalPreco)
-        .setIdentificator(safeTxid);
-      pixCode = pix.getBRCode();
-    } catch (pixError: any) {
-      Logger.error(CONTEXT, "Erro ao gerar BRCode do PIX", pixError);
-      pixCode = "Erro ao gerar código. Use a chave manual.";
-    }
+        const usuario = await prisma.usuario.findUnique({ where: { id_discord: id_discord } });
+        if (!usuario) {
+            return interaction.editReply("Você não está registado! Use o botão de registo no canal de boas-vindas primeiro.");
+        }
 
-    const dmEmbed = new EmbedBuilder()
-      .setTitle("✅ Reserva de Bilhetes Realizada!")
-      .setDescription(
-        `Sua reserva para a rifa **${rifa.nome_premio}** foi registrada.\n**ID da sua Compra:** \`${newCompraId}\`\n\nPara confirmar, pague o valor abaixo:`
-      )
-      .addFields(
-        { name: "Valor Total", value: `**${totalPrecoString}**`, inline: false },
-        { name: "Pix Copia e Cola (com valor e ID)", value: pixCode, inline: false }
-      )
-      .setColor("Blue")
-      .setFooter({ text: "Após o pagamento, um admin irá aprovar sua compra." });
+        let id_indicador: string | null = null;
+        if (referral_code_input) {
+            if (usuario.referral_code === referral_code_input) {
+                return interaction.editReply("Você não pode usar o seu próprio código de indicador!");
+            }
+            const indicador = await prisma.usuario.findUnique({ where: { referral_code: referral_code_input } });
+            if (!indicador) {
+                return interaction.editReply("Esse código de indicador não foi encontrado.");
+            }
+            id_indicador = indicador.id_discord;
+        }
 
-    try {
-      const userDM = await interaction.user.createDM();
-      await userDM.send({ embeds: [dmEmbed] });
+        const rifa = await prisma.rifa.findUnique({ where: { id_rifa: id_rifa } });
+        if (!rifa) {
+            Logger.warn(CONTEXT, `Rifa #${id_rifa} não encontrada (processarCompraRifa)`);
+            return interaction.editReply("Erro: Rifa não encontrada.");
+        }
+        if (rifa.status !== "ativa" && rifa.status !== "aguardando_sorteio") {
+            return interaction.editReply(`A rifa "${rifa.nome_premio}" não está aceitando compras.`);
+        }
 
-      // --- MUDANÇA 3: Enviar a mensagem de "rastreamento" (da imagem) para a DM ---
-      const trackerMessageContent = 
-        `✅ **Sucesso!** Sua reserva foi registrada (ID: \`${newCompraId}\`).\n` +
-        `Enviei os detalhes do pagamento e o Pix Copia e Cola para a sua DM.\n\n` +
-        `*(Esta mensagem desaparecerá automaticamente assim que sua compra for aprovada por um admin.)*`;
+        const reservados = await countBilhetesReservados(id_rifa);
+        const disponiveis = rifa.total_bilhetes - reservados;
+        if (quantidade > disponiveis) {
+            return interaction.editReply(
+                `Bilhetes insuficientes. Tentou comprar: **${quantidade}** / Disponíveis: **${disponiveis}**`
+            );
+        }
 
-      const trackerMessage = await userDM.send(trackerMessageContent);
-      
-      // Salva os IDs da mensagem enviada à DM
-      dmMessageId = trackerMessage.id;
-      dmChannelId = userDM.id;
-
-    } catch (dmError) {
-      Logger.error(CONTEXT, `Erro ao enviar DM de compra para ${id_discord}`, dmError);
-      return interaction.editReply("Falha ao enviar a DM com o Pix. Verifique se suas DMs estão abertas.");
-    }
-
-    // Envio para o canal de Log (sem alterações)
-    try {
-      const logChannelId = process.env.LOG_CHANNEL_ID;
-      if (!logChannelId) throw new Error("LOG_CHANNEL_ID não definida.");
-      const logChannel = (await client.channels.fetch(logChannelId)) as TextChannel;
-      if (logChannel) {
-        const logEmbed = new EmbedBuilder()
-          .setTitle("🔔 Nova Compra Pendente")
-          .setDescription(`Utilizador: <@${id_discord}> (${usuario.nome})\nRifa: #${id_rifa} (${rifa.nome_premio})`)
-          .addFields(
-            { name: "ID da Compra", value: `\`${newCompraId}\``, inline: true },
-            { name: "Quantidade", value: `${quantidade}`, inline: true },
-            { name: "Valor", value: totalPrecoString, inline: true }
-          )
-          .setColor("Orange")
-          .setTimestamp();
-        const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder().setCustomId(`log-approve_${newCompraId}`).setLabel("Aprovar").setStyle(ButtonStyle.Success).setEmoji("✅"),
-          new ButtonBuilder().setCustomId(`log-reject_${newCompraId}`).setLabel("Rejeitar").setStyle(ButtonStyle.Danger).setEmoji("❌")
+        Logger.info(
+            CONTEXT,
+            `Processando compra: Rifa #${id_rifa}, User: ${id_discord}, Qtd: ${quantidade}, Indicador: ${id_indicador || "Nenhum"}`
         );
-        await logChannel.send({ content: `Ação necessária para a Compra #${newCompraId}:`, embeds: [logEmbed], components: [actionRow] });
-      }
-    } catch (logErr) {
-      Logger.error(CONTEXT, `Erro ao enviar log de compra`, logErr);
-    }
 
-    // --- MUDANÇA 4: Salvar IDs da DM na DB ---
-    if (dmMessageId && dmChannelId) {
+        const newCompra = await prisma.compras.create({
+            data: {
+                id_rifa_fk: id_rifa,
+                id_usuario_fk: id_discord,
+                data_compra: new Date(),
+                quantidade: quantidade,
+                status: "em_analise",
+                id_indicador_fk: id_indicador
+            }
+        });
+        const newCompraId = newCompra.id_compra;
+
+        const totalPreco = quantidade * rifa.preco_bilhete;
+        const totalPrecoString = totalPreco.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+        let pixCode = "";
+
         try {
-            await prisma.compras.update({
-                where: { id_compra: newCompraId },
-                data: {
-                    public_reply_message_id: dmMessageId,
-                    public_reply_channel_id: dmChannelId
-                }
-            });
-        } catch (dbUpdateError) {
-            Logger.error(CONTEXT, `Falha ao salvar IDs da DM (Compra #${newCompraId})`, dbUpdateError);
+            const safeTxid = String(newCompraId).replace(/[^a-zA-Z0-9]/g, "").substring(0, 25);
+            const pix = PIX.static()
+                .setReceiverName(process.env.PIX_MERCHANT_NAME)
+                .setReceiverCity(process.env.PIX_MERCHANT_CITY)
+                .setKey(process.env.PIX_KEY)
+                .setAmount(totalPreco)
+                .setIdentificator(safeTxid);
+            pixCode = pix.getBRCode();
+        } catch (pixError: any) {
+            Logger.error(CONTEXT, "Erro ao gerar BRCode do PIX", pixError);
+            pixCode = "Erro ao gerar código. Use a chave manual.";
+        }
+
+        const dmEmbed = new EmbedBuilder()
+            .setTitle("✅ Reserva de Bilhetes Realizada!")
+            .setDescription(
+                `Sua reserva para a rifa **${rifa.nome_premio}** foi registrada.\n**ID da sua Compra:** \`${newCompraId}\`\n\nPara confirmar, pague o valor abaixo:`
+            )
+            .addFields(
+                { name: "Valor Total", value: `**${totalPrecoString}**`, inline: false },
+                { name: "Pix Copia e Cola (com valor e ID)", value: pixCode, inline: false }
+            )
+            .setColor("Blue")
+            .setFooter({ text: "Após o pagamento, um admin irá aprovar sua compra." });
+
+        try {
+            const userDM = await interaction.user.createDM();
+            await userDM.send({ embeds: [dmEmbed] });
+
+            const trackerMessageContent = 
+                `✅ **Sucesso!** Sua reserva foi registrada (ID: \`${newCompraId}\`).\n` +
+                `Enviei os detalhes do pagamento e o Pix Copia e Cola para a sua DM.\n\n` +
+                `*(Esta mensagem desaparecerá automaticamente assim que sua compra for aprovada por um admin.)*`;
+
+            const trackerMessage = await userDM.send(trackerMessageContent);
+            
+            dmMessageId = trackerMessage.id;
+            dmChannelId = userDM.id;
+
+        } catch (dmError) {
+            Logger.error(CONTEXT, `Erro ao enviar DM de compra para ${id_discord}`, dmError);
+            return interaction.editReply("Falha ao enviar a DM com o Pix. Verifique se suas DMs estão abertas.");
+        }
+
+        try {
+            const logChannelId = process.env.LOG_CHANNEL_ID;
+            if (!logChannelId) throw new Error("LOG_CHANNEL_ID não definida.");
+            const logChannel = (await client.channels.fetch(logChannelId)) as TextChannel;
+            if (logChannel) {
+                const logEmbed = new EmbedBuilder()
+                    .setTitle("🔔 Nova Compra Pendente")
+                    .setDescription(`Utilizador: <@${id_discord}> (${usuario.nome})\nRifa: #${id_rifa} (${rifa.nome_premio})`)
+                    .addFields(
+                        { name: "ID da Compra", value: `\`${newCompraId}\``, inline: true },
+                        { name: "Quantidade", value: `${quantidade}`, inline: true },
+                        { name: "Valor", value: totalPrecoString, inline: true }
+                    )
+                    .setColor("Orange")
+                    .setTimestamp();
+                const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder().setCustomId(`log-approve_${newCompraId}`).setLabel("Aprovar").setStyle(ButtonStyle.Success).setEmoji("✅"),
+                    // --- CORREÇÃO DO ERRO 1 AQUI ---
+                    new ButtonBuilder().setCustomId(`log-reject_${newCompraId}`).setLabel("Rejeitar").setStyle(ButtonStyle.Danger).setEmoji("❌")
+                    // --- FIM DA CORREÇÃO ---
+                );
+                await logChannel.send({ content: `Ação necessária para a Compra #${newCompraId}:`, embeds: [logEmbed], components: [actionRow] });
+            }
+        } catch (logErr) {
+            Logger.error(CONTEXT, `Erro ao enviar log de compra`, logErr);
+        }
+
+        if (dmMessageId && dmChannelId) {
+            try {
+                await prisma.compras.update({
+                    where: { id_compra: newCompraId },
+                    data: {
+                        public_reply_message_id: dmMessageId,
+                        public_reply_channel_id: dmChannelId
+                    }
+                });
+            } catch (dbUpdateError) {
+                Logger.error(CONTEXT, `Falha ao salvar IDs da DM (Compra #${newCompraId})`, dbUpdateError);
+            }
+        }
+
+        await interaction.editReply("✅ **Sucesso!** Enviei todos os detalhes para a sua DM.");
+        
+    } catch (error: any) {
+        Logger.error(CONTEXT, `Erro no fluxo de compra (buy-modal_ ID: ${id_rifa})`, error);
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: "Ocorreu um erro inesperado ao processar sua compra. 😢", ephemeral: true });
+        } else {
+            await interaction.editReply("Ocorreu um erro inesperado ao processar sua compra. 😢");
         }
     }
-
-    // --- MUDANÇA 5: Resposta final é efêmera ---
-    await interaction.editReply("✅ **Sucesso!** Enviei todos os detalhes para a sua DM.");
-    
-
-  } catch (error: any) {
-    Logger.error(CONTEXT, `Erro no fluxo de compra (buy-modal_ ID: ${id_rifa})`, error);
-    if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "Ocorreu um erro inesperado ao processar sua compra. 😢", ephemeral: true });
-    } else {
-        await interaction.editReply("Ocorreu um erro inesperado ao processar sua compra. 😢");
-    }
-  }
 }
 
 
 /**
  * sortearRifaDrak
- * (Esta função não foi alterada)
+ * Refatorado para enviar DM ao vencedor, sem apagar a rifa.
  */
 export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
-    // (Código Omitido - Sem Alterações)
-    await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
 
-    try {
-        Logger.info(CONTEXT, `Tentando sortear (drak) rifa #${id_rifa}`);
-        const rifa: Rifa | null = await getRifaById(id_rifa);
-        if (!rifa) throw new Error("Rifa não encontrada.");
-        if (rifa.status !== "ativa") throw new Error("Esta rifa não está ativa.");
-        if (rifa.metodo_sorteio !== "drak") throw new Error("Esta rifa não usa o método de sorteio 'drak'.");
+  try {
+    Logger.info(CONTEXT, `Tentando sortear (drak) rifa #${id_rifa}`);
+    const rifa: Rifa | null = await getRifaById(id_rifa);
+    if (!rifa) throw new Error("Rifa não encontrada.");
+    if (rifa.status !== "ativa") throw new Error("Esta rifa não está ativa.");
+    if (rifa.metodo_sorteio !== "drak") throw new Error("Esta rifa não usa o método de sorteio 'drak'.");
 
-        // Count sold (approved) tickets
-        const totalBilhetesVendidos = await prisma.bilhetes.count({
-        where: { compra: { id_rifa_fk: id_rifa, status: "aprovada" } }
-        });
-        if (totalBilhetesVendidos === 0) {
-        throw new Error("Nenhum bilhete 'aprovado' foi encontrado nesta rifa para sortear.");
-        }
-
-        // Fetch minimal dataset: array of ticket ids / numbers + compra relation id
-        // We fetch only ids and ticket numbers to reduce memory. If scale is huge, consider server-side random selection via SQL.
-        const tickets = await prisma.bilhetes.findMany({
-        where: { compra: { id_rifa_fk: id_rifa, status: "aprovada" } },
-        select: {
-            id_bilhete: true,
-            numero_bilhete: true,
-            compra: { select: { id_compra: true, usuario: { select: { id_discord: true, nome: true } } } }
-        }
-        });
-
-        if (!tickets || tickets.length === 0) {
-        throw new Error("Nenhum bilhete recuperado para sorteio.");
-        }
-
-        // Escolha aleatória uniforme na lista em memória
-        const randomIndex = Math.floor(Math.random() * tickets.length);
-        const chosen = tickets[randomIndex];
-
-        // Validate chosen owner
-        if (!chosen || !chosen.compra || !chosen.compra.usuario) {
-        throw new Error("Falha ao selecionar um bilhete vencedor e encontrar o seu dono.");
-        }
-
-        const vencedor: Vencedor = {
-        numero_bilhete: chosen.numero_bilhete,
-        id_discord: chosen.compra.usuario.id_discord,
-        nome: chosen.compra.usuario.nome
-        };
-
-        // Update raffle as finalized and set winner metadata
-        await prisma.rifa.update({
-        where: { id_rifa: id_rifa },
-        data: { status: "finalizada", sorteio_data: new Date() }
-        });
-        rifa.status = "finalizada";
-
-        // Update public message if present
-        if (rifa.channel_id && rifa.message_id) {
-        try {
-            const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
-            const message = await channel.messages.fetch(rifa.message_id);
-            const winnerData = await buildRaffleWinnerEmbed(rifa, vencedor);
-            await message.edit(winnerData);
-        } catch (msgError) {
-            Logger.error(CONTEXT, `Erro ao atualizar msg pública (sortear #${id_rifa})`, msgError);
-        }
-        }
-
-        Logger.info(CONTEXT, `Rifa #${id_rifa} sorteada (drak). Vencedor: ${vencedor.nome}`);
-        await interaction.editReply(`🎉 Sorteio Realizado com Sucesso! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
-    } catch (error: any) {
-        Logger.error(CONTEXT, `Erro ao sortear (drak) rifa #${id_rifa}`, error);
-        await interaction.editReply(`❌ Erro ao sortear: ${error.message}`);
+    const totalBilhetesVendidos = await prisma.bilhetes.count({
+      where: { compra: { id_rifa_fk: id_rifa, status: "aprovada" } }
+    });
+    if (totalBilhetesVendidos === 0) {
+      throw new Error("Nenhum bilhete 'aprovado' foi encontrado nesta rifa para sortear.");
     }
+
+    const tickets = await prisma.bilhetes.findMany({
+      where: { compra: { id_rifa_fk: id_rifa, status: "aprovada" } },
+      select: {
+        id_bilhete: true,
+        numero_bilhete: true,
+        compra: { select: { id_compra: true, usuario: { select: { id_discord: true, nome: true } } } }
+      }
+    });
+
+    if (!tickets || tickets.length === 0) {
+      throw new Error("Nenhum bilhete recuperado para sorteio.");
+    }
+
+    const randomIndex = Math.floor(Math.random() * tickets.length);
+    const chosen = tickets[randomIndex];
+
+    if (!chosen || !chosen.compra || !chosen.compra.usuario) {
+      throw new Error("Falha ao selecionar um bilhete vencedor e encontrar o seu dono.");
+    }
+
+    const vencedor: Vencedor = {
+      numero_bilhete: chosen.numero_bilhete,
+      id_discord: chosen.compra.usuario.id_discord,
+      nome: chosen.compra.usuario.nome
+    };
+
+    // Atualiza o status da rifa (NÃO A APAGA)
+    await prisma.rifa.update({
+      where: { id_rifa: id_rifa },
+      data: { status: "finalizada", sorteio_data: new Date() }
+    });
+    rifa.status = "finalizada";
+
+    // Atualiza a mensagem pública (sem alterações)
+    if (rifa.channel_id && rifa.message_id) {
+      try {
+        const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
+        const message = await channel.messages.fetch(rifa.message_id);
+        const winnerData = await buildRaffleWinnerEmbed(rifa, vencedor);
+        await message.edit(winnerData);
+      } catch (msgError) {
+        Logger.error(CONTEXT, `Erro ao atualizar msg pública (sortear #${id_rifa})`, msgError);
+      }
+    }
+    
+    // --- NOVA LÓGICA: Enviar DM ao Vencedor ---
+    try {
+        const user = await client.users.fetch(vencedor.id_discord);
+        const dmEmbed = new EmbedBuilder()
+            .setTitle(`🎉 Parabéns, Você Ganhou!`)
+            .setDescription(`Você foi o vencedor da Rifa #${rifa.id_rifa}: **${rifa.nome_premio}**!`)
+            .addFields(
+                { name: "Bilhete Sorteado", value: `\`\`\`${vencedor.numero_bilhete}\`\`\`` }
+            )
+            .setColor("Gold")
+            .setTimestamp();
+        await user.send({ embeds: [dmEmbed] });
+    } catch (dmError) {
+        Logger.error(CONTEXT, `Falha ao enviar DM de vencedor para ${vencedor.id_discord} (Rifa #${id_rifa})`, dmError);
+    }
+    // --- FIM DA NOVA LÓGICA ---
+
+    Logger.info(CONTEXT, `Rifa #${id_rifa} sorteada (drak). Vencedor: ${vencedor.nome}`);
+    await interaction.editReply(`🎉 Sorteio Realizado com Sucesso! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
+  
+  } catch (error: any) {
+    Logger.error(CONTEXT, `Erro ao sortear (drak) rifa #${id_rifa}`, error);
+    await interaction.editReply(`❌ Erro ao sortear: ${error.message}`);
+  }
 }
 
 /**
  * cancelarRifa
- * (Esta função não foi alterada)
+ * Refatorado para enviar DMs de reembolso, sem apagar a rifa.
  */
 export async function cancelarRifa(id_rifa: number, motivo: string, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
-    // (Código Omitido - Sem Alterações)
-    await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
 
-    try {
-        Logger.info(CONTEXT, `Tentando cancelar rifa #${id_rifa}. Motivo: ${motivo}`);
-        const rifa: Rifa | null = await getRifaById(id_rifa);
-        if (!rifa) throw new Error("Rifa não encontrada.");
-        if (rifa.status !== "ativa") throw new Error(`Esta rifa não pode ser cancelada (Status atual: '${rifa.status}').`);
+  try {
+    Logger.info(CONTEXT, `Tentando cancelar rifa #${id_rifa}. Motivo: ${motivo}`);
+    const rifa: Rifa | null = await getRifaById(id_rifa);
+    if (!rifa) throw new Error("Rifa não encontrada.");
+    if (rifa.status !== "ativa") throw new Error(`Esta rifa não pode ser cancelada (Status atual: '${rifa.status}').`);
 
-        await prisma.rifa.update({
-        where: { id_rifa: id_rifa },
-        data: { status: "cancelada" }
-        });
+    // --- NOVA LÓGICA: Calcular reembolsos e notificar ---
+    const participantes = await prisma.compras.groupBy({
+        by: ['id_usuario_fk'],
+        where: {
+            id_rifa_fk: id_rifa,
+            status: 'aprovada',
+            bilhetes: {
+                some: { is_free: false }
+            }
+        },
+        _sum: {
+            quantidade: true // Soma a quantidade de bilhetes pagos
+        }
+    });
 
-        if (rifa.channel_id && rifa.message_id) {
+    Logger.info(CONTEXT, `Notificando ${participantes.length} participante(s) sobre o cancelamento...`);
+
+    let dmFailCount = 0;
+    const precoBilhete = rifa.preco_bilhete;
+
+    for (const participante of participantes) {
+        const totalBilhetes = participante._sum.quantidade || 0;
+        if (totalBilhetes === 0) continue;
+        
+        const totalReembolso = totalBilhetes * precoBilhete;
+        const totalReembolsoString = totalReembolso.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
         try {
-            const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
-            const message = await channel.messages.fetch(rifa.message_id);
-            const cancelledData = buildRaffleCancelledEmbed(rifa, motivo);
-            await message.edit(cancelledData);
-        } catch (msgError) {
-            Logger.error(CONTEXT, `Erro ao atualizar msg pública (cancelar #${id_rifa})`, msgError);
-        }
-        }
+            const user = await client.users.fetch(participante.id_usuario_fk);
+            const dmEmbed = new EmbedBuilder()
+                .setTitle(`❌ Rifa Cancelada (Rifa #${id_rifa})`)
+                .setDescription(`A rifa **${rifa.nome_premio}** foi cancelada pelo administrador.`)
+                .addFields(
+                    { name: "Motivo", value: motivo },
+                    { name: "Reembolso Pendente", value: `Você possui **${totalBilhetes}** bilhete(s) pagos. Contacte um administrador para receber o seu reembolso de **${totalReembolsoString}**.` }
+                )
+                .setColor("Red")
+                .setFooter({ text: "Guarde esta mensagem como comprovante para o seu reembolso." });
+            
+            await user.send({ embeds: [dmEmbed] });
 
-        Logger.info(CONTEXT, `Rifa #${id_rifa} cancelada.`);
-        await interaction.editReply(`🗑️ Rifa #${id_rifa} cancelada com sucesso.`);
-    } catch (error: any)
-    {
-        Logger.error(CONTEXT, `Erro ao cancelar rifa #${id_rifa}`, error);
-        await interaction.editReply(`❌ Erro ao cancelar: ${error.message}`);
+        } catch (dmError) {
+            dmFailCount++;
+            Logger.warn(CONTEXT, `Falha ao enviar DM de cancelamento para ${participante.id_usuario_fk} (Rifa #${id_rifa})`, dmError);
+        }
     }
+    // --- FIM DA NOVA LÓGICA ---
+
+    await prisma.rifa.update({
+      where: { id_rifa: id_rifa },
+      data: { status: "cancelada" }
+    });
+
+    if (rifa.channel_id && rifa.message_id) {
+      try {
+        const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
+        const message = await channel.messages.fetch(rifa.message_id);
+        const cancelledData = buildRaffleCancelledEmbed(rifa, motivo);
+        await message.edit(cancelledData);
+      } catch (msgError) {
+        Logger.error(CONTEXT, `Erro ao atualizar msg pública (cancelar #${id_rifa})`, msgError);
+      }
+    }
+
+    Logger.info(CONTEXT, `Rifa #${id_rifa} cancelada.`);
+    let resposta = `🗑️ Rifa #${id_rifa} cancelada com sucesso.`;
+    if (dmFailCount > 0) {
+        resposta += `\n⚠️ **Aviso:** Falha ao notificar ${dmFailCount} participante(s) por DM (provavelmente DMs fechadas).`;
+    }
+    await interaction.editReply(resposta);
+  
+  } catch (error: any) {
+    Logger.error(CONTEXT, `Erro ao cancelar rifa #${id_rifa}`, error);
+    await interaction.editReply(`❌ Erro ao cancelar: ${error.message}`);
+  }
 }
 
-/**
- * getLotteryWinnerNumber
- * (Esta função não foi alterada)
- */
+// --- CORREÇÃO DO ERRO 2 AQUI ---
+// Função re-adicionada
 function getLotteryWinnerNumber(totalBilhetes: number, numeroSorteado: string): string {
-    // (Código Omitido - Sem Alterações)
-    const requiredLength = String(totalBilhetes - 1).length;
-    const winnerNumber = numeroSorteado.slice(-requiredLength);
-    return winnerNumber.padStart(requiredLength, "0");
+  const requiredLength = String(totalBilhetes - 1).length;
+  const winnerNumber = numeroSorteado.slice(-requiredLength);
+  return winnerNumber.padStart(requiredLength, "0");
 }
+// --- FIM DA CORREÇÃO ---
+
 
 /**
  * finalizarRifaLoteria
- * (Esta função não foi alterada)
+ * Refatorado para enviar DM ao vencedor, sem apagar a rifa.
  */
 export async function finalizarRifaLoteria(
   id_rifa: number,
@@ -527,69 +555,90 @@ export async function finalizarRifaLoteria(
   client: ExtendedClient,
   interaction: ChatInputCommandInteraction
 ) {
-    // (Código Omitido - Sem Alterações)
-    await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
 
-    if (!/^\d+$/.test(numero_sorteado_input)) {
-        return interaction.editReply("O número sorteado deve conter apenas dígitos.");
-    }
+  if (!/^\d+$/.test(numero_sorteado_input)) {
+    return interaction.editReply("O número sorteado deve conter apenas dígitos.");
+  }
 
-    try {
-        Logger.info(CONTEXT, `Tentando finalizar (loteria) rifa #${id_rifa} com o número ${numero_sorteado_input}`);
-        const rifa: Rifa | null = await getRifaById(id_rifa);
-        if (!rifa) throw new Error("Rifa não encontrada.");
-        if (rifa.metodo_sorteio !== "loteria") throw new Error("Esta rifa não é do método 'loteria'.");
-        if (rifa.status !== "aguardando_sorteio") throw new Error(`Esta rifa não está 'aguardando_sorteio' (Status: ${rifa.status}).`);
+  try {
+    Logger.info(CONTEXT, `Tentando finalizar (loteria) rifa #${id_rifa} com o número ${numero_sorteado_input}`);
+    const rifa: Rifa | null = await getRifaById(id_rifa);
+    if (!rifa) throw new Error("Rifa não encontrada.");
+    if (rifa.metodo_sorteio !== "loteria") throw new Error("Esta rifa não é do método 'loteria'.");
+    if (rifa.status !== "aguardando_sorteio") throw new Error(`Esta rifa não está 'aguardando_sorteio' (Status: ${rifa.status}).`);
 
-        const bilheteVencedorStr = getLotteryWinnerNumber(rifa.total_bilhetes, numero_sorteado_input);
+    const bilheteVencedorStr = getLotteryWinnerNumber(rifa.total_bilhetes, numero_sorteado_input);
 
-        const bilheteVencedor = await prisma.bilhetes.findFirst({
-        where: {
-            compra: { id_rifa_fk: id_rifa, status: "aprovada" },
-            numero_bilhete: bilheteVencedorStr
-        },
-        include: {
-            compra: { include: { usuario: true } }
-        }
-        });
+    const bilheteVencedor = await prisma.bilhetes.findFirst({
+      where: {
+        compra: { id_rifa_fk: id_rifa, status: "aprovada" },
+        numero_bilhete: bilheteVencedorStr
+      },
+      include: {
+        compra: { include: { usuario: true } }
+      }
+    });
 
-        if (!bilheteVencedor || !bilheteVencedor.compra || !bilheteVencedor.compra.usuario) {
-        await prisma.rifa.update({
-            where: { id_rifa: id_rifa },
-            data: { status: "finalizada", sorteio_data: new Date() }
-        });
-        Logger.info(CONTEXT, `Sorteio (loteria) rifa #${id_rifa} finalizado. Bilhete ${bilheteVencedorStr} não foi vendido.`);
-        await interaction.editReply(`ℹ️ Sorteio da Loteria Registrado! Bilhete ${bilheteVencedorStr} não foi vendido.`);
-        return;
-        }
-
-        const vencedor: Vencedor = {
-        numero_bilhete: bilheteVencedor.numero_bilhete,
-        id_discord: bilheteVencedor.compra.usuario.id_discord,
-        nome: bilheteVencedor.compra.usuario.nome
-        };
-
-        await prisma.rifa.update({
+    // Caso não haja vencedor
+    if (!bilheteVencedor || !bilheteVencedor.compra || !bilheteVencedor.compra.usuario) {
+      await prisma.rifa.update({
         where: { id_rifa: id_rifa },
         data: { status: "finalizada", sorteio_data: new Date() }
-        });
-        rifa.status = "finalizada";
-
-        if (rifa.channel_id && rifa.message_id) {
-        try {
-            const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
-            const message = await channel.messages.fetch(rifa.message_id);
-            const winnerData = await buildRaffleWinnerEmbed(rifa, vencedor);
-            await message.edit(winnerData);
-        } catch (msgError) {
-            Logger.error(CONTEXT, `Erro ao atualizar msg pública (finalizar-loteria #${id_rifa})`, msgError);
-        }
-        }
-
-        Logger.info(CONTEXT, `Rifa #${id_rifa} finalizada (loteria). Vencedor: ${vencedor.nome}`);
-        await interaction.editReply(`🎉 Sorteio da Loteria Finalizado! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
-    } catch (error: any) {
-        Logger.error(CONTEXT, `Erro ao finalizar (loteria) rifa #${id_rifa}`, error);
-        await interaction.editReply(`❌ Erro ao finalizar: ${error.message}`);
+      });
+      Logger.info(CONTEXT, `Sorteio (loteria) rifa #${id_rifa} finalizado. Bilhete ${bilheteVencedorStr} não foi vendido.`);
+      await interaction.editReply(`ℹ️ Sorteio da Loteria Registrado! Bilhete ${bilheteVencedorStr} não foi vendido.`);
+      return;
     }
+
+    // Caso haja vencedor
+    const vencedor: Vencedor = {
+      numero_bilhete: bilheteVencedor.numero_bilhete,
+      id_discord: bilheteVencedor.compra.usuario.id_discord,
+      nome: bilheteVencedor.compra.usuario.nome
+    };
+
+    await prisma.rifa.update({
+      where: { id_rifa: id_rifa },
+      data: { status: "finalizada", sorteio_data: new Date() }
+    });
+    rifa.status = "finalizada";
+
+    if (rifa.channel_id && rifa.message_id) {
+      try {
+        const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
+        const message = await channel.messages.fetch(rifa.message_id);
+        const winnerData = await buildRaffleWinnerEmbed(rifa, vencedor);
+        await message.edit(winnerData);
+      } catch (msgError) {
+        Logger.error(CONTEXT, `Erro ao atualizar msg pública (finalizar-loteria #${id_rifa})`, msgError);
+      }
+    }
+
+    // --- NOVA LÓGICA: Enviar DM ao Vencedor ---
+    try {
+        const user = await client.users.fetch(vencedor.id_discord);
+        const dmEmbed = new EmbedBuilder()
+            .setTitle(`🎉 Parabéns, Você Ganhou!`)
+            .setDescription(`Você foi o vencedor da Rifa #${rifa.id_rifa}: **${rifa.nome_premio}**!`)
+            .addFields(
+                { name: "Método", value: "Loteria Federal" },
+                { name: "Número Sorteado", value: `\`\`\`${numero_sorteado_input}\`\`\`` },
+                { name: "Seu Bilhete Vencedor", value: `\`\`\`${vencedor.numero_bilhete}\`\`\`` }
+            )
+            .setColor("Gold")
+            .setTimestamp();
+        await user.send({ embeds: [dmEmbed] });
+    } catch (dmError) {
+        Logger.error(CONTEXT, `Falha ao enviar DM de vencedor para ${vencedor.id_discord} (Rifa #${id_rifa})`, dmError);
+    }
+    // --- FIM DA NOVA LÓGICA ---
+
+    Logger.info(CONTEXT, `Rifa #${id_rifa} finalizada (loteria). Vencedor: ${vencedor.nome}`);
+    await interaction.editReply(`🎉 Sorteio da Loteria Finalizado! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
+  
+  } catch (error: any) {
+    Logger.error(CONTEXT, `Erro ao finalizar (loteria) rifa #${id_rifa}`, error);
+    await interaction.editReply(`❌ Erro ao finalizar: ${error.message}`);
+  }
 }

@@ -8,7 +8,7 @@ import {
     TextInputBuilder, TextInputStyle, ModalSubmitInteraction
 } from "discord.js";
 import { Command } from "../../structs/types/Command";
-import { prisma } from "../../prismaClient"; // Necessário para o /listar
+import { prisma } from "../../prismaClient"; 
 import { ExtendedClient } from "../../structs/ExtendedClient";
 
 // Importa a lógica de negócio do Service
@@ -20,9 +20,6 @@ import {
 // Importa o novo Logger
 import { Logger } from "../../utils/Logger";
 
-// --- Toda a lógica de aprovarCompra, rejeitarCompra e getPendingCompraIds foi REMOVIDA daqui ---
-
-// --- EXPORTAÇÃO DO COMANDO (COMPLETO) ---
 export default new Command({
     name: "gestao",
     description: "Gerencia compras e pagamentos.",
@@ -34,10 +31,26 @@ export default new Command({
             name: "listar",
             description: "Lista todas as compras pendentes (em análise).",
             type: ApplicationCommandOptionType.Subcommand,
+        },
+        // --- NOVO SUB-COMANDO ADICIONADO ---
+        {
+            name: "purgar-rifa",
+            description: "[PERIGOSO] Apaga permanentemente uma rifa finalizada ou cancelada e todos os seus dados.",
+            type: ApplicationCommandOptionType.Subcommand,
+            options: [
+                {
+                    name: "id_rifa",
+                    description: "O ID da rifa a ser apagada.",
+                    type: ApplicationCommandOptionType.Integer,
+                    required: true
+                }
+            ]
         }
+        // --- FIM DO NOVO SUB-COMANDO ---
     ],
     async run({ client, interaction, options }) {
         const subcomando = options.getSubcommand();
+        
         if (subcomando === "listar") {
             await interaction.deferReply({ ephemeral: true });
             try {
@@ -82,16 +95,52 @@ export default new Command({
                 await interaction.editReply({ embeds: [embed], components: [rowLote, rowTodos] });
 
             } catch (error: any) {
-                // --- LOG ATUALIZADO ---
                 Logger.error("Comando", "Falha ao executar /gestao listar", error);
                 await interaction.editReply(`❌ Erro ao listar compras: ${error.message}`);
             }
         }
+        
+        // --- NOVA LÓGICA DO SUB-COMANDO 'PURGAR-RIFA' ---
+        else if (subcomando === "purgar-rifa") {
+            const id_rifa = options.getInteger("id_rifa", true);
+            await interaction.deferReply({ ephemeral: true });
+
+            const rifa = await prisma.rifa.findUnique({
+                where: { id_rifa: id_rifa },
+                select: { status: true }
+            });
+
+            if (!rifa) {
+                return interaction.editReply(`❌ Rifa #${id_rifa} não encontrada.`);
+            }
+
+            // Medida de segurança: Só permitir apagar rifas que já terminaram.
+            if (rifa.status === 'ativa' || rifa.status === 'aguardando_sorteio') {
+                return interaction.editReply(`❌ A Rifa #${id_rifa} ainda está ativa! Apenas rifas 'finalizada' ou 'cancelada' podem ser apagadas.`);
+            }
+
+            try {
+                // Graças ao 'onDelete: Cascade', isto apaga TUDO:
+                // Rifa -> Compras -> Bilhetes
+                // Rifa -> PremiosInstantaneos
+                await prisma.rifa.delete({
+                    where: { id_rifa: id_rifa }
+                });
+                
+                Logger.info("Comando", `[PURGE] Rifa #${id_rifa} e todos os dados associados foram apagados.`);
+                await interaction.editReply(`✅ A Rifa #${id_rifa} (Status: ${rifa.status}) e todos os seus dados (compras, bilhetes) foram permanentemente apagados.`);
+
+            } catch (error: any) {
+                Logger.error("Comando", `[PURGE] Falha ao purgar a rifa #${id_rifa}`, error);
+                await interaction.editReply(`❌ Ocorreu um erro ao apagar a rifa: ${error.message}`);
+            }
+        }
+        // --- FIM DA NOVA LÓGICA ---
     },
 
-    // --- BOTÕES (Completos e chamando o Service) ---
+    // Botões e Modals (NÃO MUDAM)
     buttons: new Collection<string, (interaction: ButtonInteraction, client: ExtendedClient) => any>([
-        // Botões de Log
+        // ... (código dos botões 'log-approve_', 'log-reject_', etc. - sem alterações) ...
         ["log-approve_", async (interaction, client) => {
             await interaction.deferUpdate(); 
             if (!interaction.message) {
@@ -119,7 +168,6 @@ export default new Command({
                     );
                 await interaction.message.edit({ embeds: [newEmbed], components: [] });
             } catch (error: any) {
-                // --- LOG ATUALIZADO ---
                 Logger.error("Botao", `Erro ao processar log-approve_ (ID: ${id_compra})`, error);
                 await interaction.followUp({ content: `❌ Erro ao aprovar #${id_compra}: ${error.message}`, ephemeral: true });
             }
@@ -144,7 +192,6 @@ export default new Command({
                 await interaction.showModal(modal);
 
             } catch (error: any) {
-                // --- LOG ATUALIZADO ---
                 Logger.error("Botao", "Falha ao MOSTRAR o modal de rejeição (log-reject_)", error);
             }
         }],
@@ -230,7 +277,6 @@ export default new Command({
                     const msg = await aprovarCompra(id, client); // Chama o service
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
-                    // --- LOG ATUALIZADO ---
                     Logger.error("Botao", `Falha no lote 'Aprovar Todos' (ID: ${id})`, error);
                     errorLog += `**ID \`${id}\`:** ${error.message}\n`;
                 }
@@ -241,10 +287,9 @@ export default new Command({
             await interaction.editReply({ embeds: [embed] });
         }]
     ]),
-
-    // --- MODALS (Completos e chamando o Service) ---
+    
     modals: new Collection<string, (interaction: ModalSubmitInteraction, client: ExtendedClient) => any>([
-        // Modal: Rejeição do Log
+        // ... (código dos modals 'log-reject-modal_', 'gestao-aprovar-lote-submit', etc. - sem alterações) ...
         ["log-reject-modal_", async (interaction, client) => {
             await interaction.deferUpdate();
             if (!interaction.message) {
@@ -274,7 +319,6 @@ export default new Command({
                     );
                 await interaction.message.edit({ embeds: [newEmbed], components: [] });
             } catch (error: any) {
-                // --- LOG ATUALIZADO ---
                 Logger.error("Modal", `Erro ao processar log-reject-modal_ (ID: ${id_compra})`, error);
                 await interaction.followUp({ content: `❌ Erro ao rejeitar #${id_compra}: ${error.message}`, ephemeral: true });
             }
@@ -294,7 +338,6 @@ export default new Command({
                     const msg = await aprovarCompra(id, client); // Chama o service
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
-                    // --- LOG ATUALIZADO ---
                     Logger.error("Modal", `Falha no lote 'Aprovar' (ID: ${id})`, error);
                     errorLog += `**ID \`${id}\`:** ${error.message}\n`;
                 }
@@ -321,7 +364,6 @@ export default new Command({
                     const msg = await rejeitarCompra(id, motivo, client); // Chama o service
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
-                    // --- LOG ATUALIZADO ---
                     Logger.error("Modal", `Falha no lote 'Rejeitar' (ID: ${id})`, error);
                     errorLog += `**ID \`${id}\`:** ${error.message}\n`;
                 }
@@ -347,7 +389,6 @@ export default new Command({
                     const msg = await rejeitarCompra(id, motivo, client); // Chama o service
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
-                    // --- LOG ATUALIZADO ---
                     Logger.error("Modal", `Falha no lote 'Rejeitar Todos' (ID: ${id})`, error);
                     errorLog += `**ID \`${id}\`:** ${error.message}\n`;
                 }
