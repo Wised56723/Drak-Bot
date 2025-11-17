@@ -11,13 +11,11 @@ import { Command } from "../../structs/types/Command";
 import { prisma } from "../../prismaClient"; 
 import { ExtendedClient } from "../../structs/ExtendedClient";
 
-// Importa a lógica de negócio do Service
 import { 
     aprovarCompra, 
     rejeitarCompra, 
     getPendingCompraIds 
 } from "../../services/GestaoService";
-// Importa o novo Logger
 import { Logger } from "../../utils/Logger";
 
 export default new Command({
@@ -32,26 +30,20 @@ export default new Command({
             description: "Lista todas as compras pendentes (em análise).",
             type: ApplicationCommandOptionType.Subcommand,
         },
-        // --- NOVO SUB-COMANDO ADICIONADO ---
+        // --- INÍCIO DA REATORAÇÃO DO PURGE ---
         {
-            name: "purgar-rifa",
-            description: "[PERIGOSO] Apaga permanentemente uma rifa finalizada ou cancelada e todos os seus dados.",
-            type: ApplicationCommandOptionType.Subcommand,
-            options: [
-                {
-                    name: "id_rifa",
-                    description: "O ID da rifa a ser apagada.",
-                    type: ApplicationCommandOptionType.Integer,
-                    required: true
-                }
-            ]
+            name: "purgar-rifas", // Nomeado no plural
+            description: "[PERIGOSO] Apaga TODAS as rifas 'finalizada' ou 'cancelada' e seus dados.",
+            type: ApplicationCommandOptionType.Subcommand
+            // Opção 'id_rifa' removida
         }
-        // --- FIM DO NOVO SUB-COMANDO ---
+        // --- FIM DA REATORAÇÃO DO PURGE ---
     ],
     async run({ client, interaction, options }) {
         const subcomando = options.getSubcommand();
         
         if (subcomando === "listar") {
+            // ... (lógica do 'listar' - sem alterações) ...
             await interaction.deferReply({ ephemeral: true });
             try {
                 const compras = await prisma.compras.findMany({
@@ -100,47 +92,41 @@ export default new Command({
             }
         }
         
-        // --- NOVA LÓGICA DO SUB-COMANDO 'PURGAR-RIFA' ---
-        else if (subcomando === "purgar-rifa") {
-            const id_rifa = options.getInteger("id_rifa", true);
+        // --- INÍCIO DA REATORAÇÃO DO PURGE ---
+        else if (subcomando === "purgar-rifas") {
             await interaction.deferReply({ ephemeral: true });
 
-            const rifa = await prisma.rifa.findUnique({
-                where: { id_rifa: id_rifa },
-                select: { status: true }
+            // 1. Encontrar quantas rifas serão apagadas
+            const rifasParaPurgar = await prisma.rifa.findMany({
+                where: { status: { in: ['finalizada', 'cancelada'] } },
+                select: { id_rifa: true }
             });
 
-            if (!rifa) {
-                return interaction.editReply(`❌ Rifa #${id_rifa} não encontrada.`);
+            if (rifasParaPurgar.length === 0) {
+                return interaction.editReply("✅ Não há nenhuma rifa 'finalizada' ou 'cancelada' para purgar.");
             }
 
-            // Medida de segurança: Só permitir apagar rifas que já terminaram.
-            if (rifa.status === 'ativa' || rifa.status === 'aguardando_sorteio') {
-                return interaction.editReply(`❌ A Rifa #${id_rifa} ainda está ativa! Apenas rifas 'finalizada' ou 'cancelada' podem ser apagadas.`);
-            }
-
-            try {
-                // Graças ao 'onDelete: Cascade', isto apaga TUDO:
-                // Rifa -> Compras -> Bilhetes
-                // Rifa -> PremiosInstantaneos
-                await prisma.rifa.delete({
-                    where: { id_rifa: id_rifa }
-                });
-                
-                Logger.info("Comando", `[PURGE] Rifa #${id_rifa} e todos os dados associados foram apagados.`);
-                await interaction.editReply(`✅ A Rifa #${id_rifa} (Status: ${rifa.status}) e todos os seus dados (compras, bilhetes) foram permanentemente apagados.`);
-
-            } catch (error: any) {
-                Logger.error("Comando", `[PURGE] Falha ao purgar a rifa #${id_rifa}`, error);
-                await interaction.editReply(`❌ Ocorreu um erro ao apagar a rifa: ${error.message}`);
-            }
+            // 2. Pedir confirmação de segurança
+            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('gestao-purgar-todas-EXECUTE')
+                    .setLabel(`Sim, purgar TODAS (${rifasParaPurgar.length})`)
+                    .setStyle(ButtonStyle.Danger), // Botão de perigo
+                new ButtonBuilder()
+                    .setCustomId('gestao-cancelar-acao')
+                    .setLabel('Cancelar')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+            await interaction.editReply({
+                content: `**CONFIRMAÇÃO EXTREMA:**\nVocê tem certeza que deseja apagar **TODAS** as ${rifasParaPurgar.length} rifas finalizadas/canceladas?\n\n**Esta ação NÃO pode ser desfeita e apagará todos os bilhetes e compras associados a elas.**`,
+                components: [row]
+            });
         }
-        // --- FIM DA NOVA LÓGICA ---
+        // --- FIM DA REATORAÇÃO DO PURGE ---
     },
 
-    // Botões e Modals (NÃO MUDAM)
     buttons: new Collection<string, (interaction: ButtonInteraction, client: ExtendedClient) => any>([
-        // ... (código dos botões 'log-approve_', 'log-reject_', etc. - sem alterações) ...
+        // ... (botões 'log-approve_', 'log-reject_', 'gestao-aprovar-lote-modal', etc. - sem alterações) ...
         ["log-approve_", async (interaction, client) => {
             await interaction.deferUpdate(); 
             if (!interaction.message) {
@@ -155,7 +141,6 @@ export default new Command({
             }
 
             try {
-                // Chama o Service
                 const msg = await aprovarCompra(id_compra, client);
                 
                 const originalEmbed = interaction.message.embeds[0];
@@ -195,8 +180,6 @@ export default new Command({
                 Logger.error("Botao", "Falha ao MOSTRAR o modal de rejeição (log-reject_)", error);
             }
         }],
-        
-        // Botões de Lote (do /gestao listar)
         ["gestao-aprovar-lote-modal", (interaction) => {
             const modal = new ModalBuilder()
                 .setCustomId('gestao-aprovar-lote-submit')
@@ -233,7 +216,7 @@ export default new Command({
             interaction.showModal(modal);
         }],
         ["gestao-aprovar-todos-prompt", async (interaction) => {
-            const pendingIds = await getPendingCompraIds(); // Chama o service
+            const pendingIds = await getPendingCompraIds(); 
             if (pendingIds.length === 0) {
                 return interaction.reply({ content: "Não há mais compras pendentes para aprovar.", ephemeral: true });
             }
@@ -248,7 +231,7 @@ export default new Command({
             });
         }],
         ["gestao-rejeitar-todos-prompt", async (interaction) => {
-            const pendingIds = await getPendingCompraIds(); // Chama o service
+            const pendingIds = await getPendingCompraIds(); 
             if (pendingIds.length === 0) {
                 return interaction.reply({ content: "Não há mais compras pendentes para rejeitar.", ephemeral: true });
             }
@@ -265,16 +248,17 @@ export default new Command({
             await interaction.showModal(modal);
         }],
         ["gestao-cancelar-acao", (interaction) => {
+            // Este botão é reutilizado pelo novo comando de purge
             interaction.deleteReply();
         }],
         ["gestao-aprovar-todos-EXECUTE", async (interaction, client) => {
             await interaction.deferReply({ ephemeral: true });
-            const ids = await getPendingCompraIds(); // Chama o service
+            const ids = await getPendingCompraIds(); 
             let successLog = "";
             let errorLog = "";
             for (const id of ids) {
                 try {
-                    const msg = await aprovarCompra(id, client); // Chama o service
+                    const msg = await aprovarCompra(id, client); 
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
                     Logger.error("Botao", `Falha no lote 'Aprovar Todos' (ID: ${id})`, error);
@@ -285,11 +269,41 @@ export default new Command({
             if (successLog) embed.addFields({ name: "✅ Sucessos", value: successLog.substring(0, 1024) });
             if (errorLog) embed.addFields({ name: "❌ Falhas", value: errorLog.substring(0, 1024) });
             await interaction.editReply({ embeds: [embed] });
-        }]
+        }],
+
+        // --- NOVO HANDLER DE BOTÃO PARA O PURGE ---
+        ["gestao-purgar-todas-EXECUTE", async (interaction, client) => {
+            await interaction.deferUpdate(); // A resposta original é efêmera
+            
+            try {
+                // Graças ao 'onDelete: Cascade', isto apaga tudo.
+                const deleteResult = await prisma.rifa.deleteMany({
+                    where: { 
+                        status: { in: ['finalizada', 'cancelada'] } 
+                    }
+                });
+
+                const count = deleteResult.count;
+                Logger.info("Botao", `[PURGE] ${count} rifas e todos os dados associados foram apagados por ${interaction.user.id}.`);
+                
+                await interaction.editReply({ 
+                    content: `✅ **Sucesso!** ${count} rifas e todos os seus dados associados foram permanentemente apagados.`,
+                    components: [] // Remove os botões
+                });
+
+            } catch (error: any) {
+                Logger.error("Botao", `[PURGE] Falha ao executar o purge em massa.`, error);
+                await interaction.editReply({ 
+                    content: `❌ Erro ao tentar purgar as rifas: ${error.message}`,
+                    components: []
+                });
+            }
+        }],
+        // --- FIM DO NOVO HANDLER ---
     ]),
     
     modals: new Collection<string, (interaction: ModalSubmitInteraction, client: ExtendedClient) => any>([
-        // ... (código dos modals 'log-reject-modal_', 'gestao-aprovar-lote-submit', etc. - sem alterações) ...
+        // ... (código dos modals - sem alterações) ...
         ["log-reject-modal_", async (interaction, client) => {
             await interaction.deferUpdate();
             if (!interaction.message) {
@@ -306,7 +320,6 @@ export default new Command({
             }
 
             try {
-                // Chama o Service
                 const msg = await rejeitarCompra(id_compra, motivo, client);
                 
                 const originalEmbed = interaction.message.embeds[0];
@@ -323,8 +336,6 @@ export default new Command({
                 await interaction.followUp({ content: `❌ Erro ao rejeitar #${id_compra}: ${error.message}`, ephemeral: true });
             }
         }],
-
-        // Modal: Aprovação em Lote
         ["gestao-aprovar-lote-submit", async (interaction, client) => {
             await interaction.deferReply({ ephemeral: true });
             const idsString = interaction.fields.getTextInputValue("lote-ids-aprovar");
@@ -335,7 +346,7 @@ export default new Command({
             let errorLog = "";
             for (const id of ids) {
                 try {
-                    const msg = await aprovarCompra(id, client); // Chama o service
+                    const msg = await aprovarCompra(id, client); 
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
                     Logger.error("Modal", `Falha no lote 'Aprovar' (ID: ${id})`, error);
@@ -347,8 +358,6 @@ export default new Command({
             if (errorLog) embed.addFields({ name: "❌ Falhas", value: errorLog });
             await interaction.editReply({ embeds: [embed] });
         }],
-
-        // Modal: Rejeição em Lote
         ["gestao-rejeitar-lote-submit", async (interaction, client) => {
             await interaction.deferReply({ ephemeral: true });
             const idsString = interaction.fields.getTextInputValue("lote-ids-rejeitar");
@@ -361,7 +370,7 @@ export default new Command({
             let errorLog = "";
             for (const id of ids) {
                 try {
-                    const msg = await rejeitarCompra(id, motivo, client); // Chama o service
+                    const msg = await rejeitarCompra(id, motivo, client); 
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
                     Logger.error("Modal", `Falha no lote 'Rejeitar' (ID: ${id})`, error);
@@ -373,12 +382,10 @@ export default new Command({
             if (errorLog) embed.addFields({ name: "❌ Falhas", value: errorLog });
             await interaction.editReply({ embeds: [embed] });
         }],
-
-        // Modal: Rejeição de TODOS
         ["gestao-rejeitar-todos-SUBMIT", async (interaction, client) => {
             await interaction.deferReply({ ephemeral: true });
             const motivo = interaction.fields.getTextInputValue("lote-motivo-todos");
-            const ids = await getPendingCompraIds(); // Chama o service
+            const ids = await getPendingCompraIds(); 
             if (!motivo) return interaction.editReply("O motivo é obrigatório.");
             if (ids.length === 0) return interaction.editReply("Não há mais compras para rejeitar.");
             
@@ -386,7 +393,7 @@ export default new Command({
             let errorLog = "";
             for (const id of ids) {
                 try {
-                    const msg = await rejeitarCompra(id, motivo, client); // Chama o service
+                    const msg = await rejeitarCompra(id, motivo, client); 
                     successLog += `**ID \`${id}\`:** ${msg}\n`;
                 } catch (error: any) {
                     Logger.error("Modal", `Falha no lote 'Rejeitar Todos' (ID: ${id})`, error);

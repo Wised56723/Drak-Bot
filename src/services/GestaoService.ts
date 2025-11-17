@@ -9,9 +9,8 @@ import { Prisma } from "@prisma/client";
 
 const CONTEXT: LogContext = "GestaoService"; 
 
-// --- MUDANÇA 1: Atualizar o tipo de retorno ---
 type AprovacaoResult = {
-    novosNumeros: string[];
+    novosNumeros: string[]; // Ainda precisamos disto para a resposta do Admin
     premiosGanhos: { numero: string, premio: string }[];
     compra: { 
         id_rifa_fk: number;
@@ -23,7 +22,6 @@ type AprovacaoResult = {
             total_bilhetes: number;
             id_rifa: number;
         };
-        // Novos campos
         public_reply_message_id: string | null;
         public_reply_channel_id: string | null;
     };
@@ -41,7 +39,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
     
     const { novosNumeros, premiosGanhos, compra } = await prisma.$transaction(async (tx): Promise<AprovacaoResult> => {
         
-        // --- MUDANÇA 2: Selecionar os novos campos ---
         const compra = await tx.compras.findUnique({
             where: { id_compra: id_compra },
             select: {
@@ -52,8 +49,8 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
                 status: true,
                 id_indicador_fk: true,
                 rifa: true,
-                public_reply_message_id: true, // Adicionado
-                public_reply_channel_id: true  // Adicionado
+                public_reply_message_id: true, 
+                public_reply_channel_id: true  
             }
         });
 
@@ -81,7 +78,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             throw new Error(`Excede o total! (${vendidos} + ${compra.quantidade} > ${rifa.total_bilhetes} total)`);
         }
 
-        // 1. Cria a lista de todos os bilhetes disponíveis
         const availableTickets: string[] = [];
         for (let i = 0; i < rifa.total_bilhetes; i++) {
             const numeroBilhete = String(i).padStart(padding, '0');
@@ -90,13 +86,11 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             }
         }
 
-        // 2. Embaralha a lista de disponíveis (Fisher-Yates)
         for (let i = availableTickets.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [availableTickets[i], availableTickets[j]] = [availableTickets[j], availableTickets[i]];
         }
-
-        // (Lógica de seleção corrigida da etapa anterior)
+        
         if (availableTickets.length < compra.quantidade) {
             throw new Error(`Concorrência: Bilhetes disponíveis (${availableTickets.length}) é menor que a quantidade pedida (${compra.quantidade}).`);
         }
@@ -138,7 +132,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
         
         novosNumeros.forEach((n: string) => soldTicketSet.add(n));
 
-        // Lógica de Bônus (Indicador)
         bonusMessage = "";
         const totalPreco = compra.quantidade * rifa.preco_bilhete;
         
@@ -199,11 +192,20 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     try {
         const user = await client.users.fetch(compra.id_usuario_fk);
+
+        // --- INÍCIO DA REATORAÇÃO DA DM ---
         const dmEmbed = new EmbedBuilder()
             .setTitle(`✅ Compra Aprovada (Rifa #${compra.id_rifa_fk})`)
             .setDescription(`Sua compra de **${compra.quantidade} bilhete(s)** foi aprovada!`)
-            .addFields({ name: "Seus Números da Sorte (Aleatórios)", value: `\`\`\`${novosNumeros.join(', ')}\`\`\`` })
+            // Campo removido: .addFields({ name: "Seus Números da Sorte (Aleatórios)", value: `\`\`\`${novosNumeros.join(', ')}\`\`\`` })
+            .addFields({ 
+                name: "Consulta de Bilhetes", 
+                value: `Para ver o total de bilhetes que você possui, use o comando \`/meus-bilhetes\` aqui na minha DM.` 
+            })
             .setColor("Green").setTimestamp();
+        
+        // A lógica de prémio instantâneo continua igual, pois é importante
+        // mostrar o número específico que ganhou.
         if (premiosGanhos.length > 0) {
             dmEmbed.addFields({
                 name: "🎉 BILHETE PREMIADO! 🎉",
@@ -211,12 +213,15 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             });
             dmEmbed.setColor("Gold");
         }
+        // --- FIM DA REATORAÇÃO DA DM ---
+
         await user.send({ embeds: [dmEmbed] });
     } catch (dmError) { 
         Logger.error(CONTEXT, `Erro ao enviar DM (aprovar) para ${compra.id_usuario_fk}`, dmError);
     }
     
     if (bonusMessage && compra.id_indicador_fk) {
+        // ... (lógica de DM de bônus - sem alterações) ...
         try {
             const indicadorUser = await client.users.fetch(compra.id_indicador_fk);
             const convidado = await client.users.fetch(compra.id_usuario_fk);
@@ -232,11 +237,10 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     await updateRaffleMessage(client, compra.id_rifa_fk);
 
-    // --- MUDANÇA 3: Deletar a mensagem de reserva pública ---
     if (compra.public_reply_message_id && compra.public_reply_channel_id) {
+        // ... (lógica de apagar a mensagem de reserva na DM - sem alterações) ...
         try {
             const channel = await client.channels.fetch(compra.public_reply_channel_id);
-            // Verifica se o canal existe e é um canal de texto
             if (channel && (channel.isTextBased() || channel.isThread())) { 
                 const message = await channel.messages.fetch(compra.public_reply_message_id);
                 if (message) {
@@ -245,13 +249,11 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
                 }
             }
         } catch (deleteError) {
-            // Loga um aviso, mas não impede a aprovação
             Logger.warn(CONTEXT, `Falha ao deletar mensagem de reserva pública ${compra.public_reply_message_id} (Pode já ter sido deletada).`, deleteError);
         }
     }
-    // --- FIM DA MUDANÇA ---
 
-
+    // A resposta do Admin (que vê os números) permanece igual
     let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>, ${novosNumeros.join(', ')})`;
     if (premiosGanhos.length > 0) {
         const premioTxt = premiosGanhos.map((p: { numero: string, premio: string }) => `Bilhete \`${p.numero}\` ganhou **${p.premio}**`).join(', ');
@@ -267,10 +269,9 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
 /**
  * Lógica de negócio para rejeitar uma compra.
- * (Esta função não foi alterada, MAS poderia ser estendida para
- * editar a mensagem pública de "rejeitada" em vez de deletar)
  */
 export async function rejeitarCompra(id_compra: number, motivo: string, client: ExtendedClient): Promise<string> {
+    // (Esta função não foi alterada)
     Logger.info(CONTEXT, `Iniciando rejeição da compra #${id_compra}...`);
     
     const compra = await prisma.compras.findUnique({
@@ -281,7 +282,6 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
             id_usuario_fk: true,
             quantidade: true,
             status: true,
-            // Adicionamos os campos caso queira editar a msg pública para "REJEITADA"
             public_reply_message_id: true,
             public_reply_channel_id: true
         }
@@ -308,7 +308,6 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
         Logger.error(CONTEXT, `Erro ao enviar DM (rejeitar) para ${compra.id_usuario_fk}`, dmError);
     }
     
-    // (Opcional) Edita a mensagem pública para "Rejeitada"
     if (compra.public_reply_message_id && compra.public_reply_channel_id) {
          try {
             const channel = await client.channels.fetch(compra.public_reply_channel_id);
@@ -335,6 +334,7 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
  * Busca todos os IDs pendentes
  */
 export async function getPendingCompraIds(): Promise<number[]> {
+    // (Esta função não foi alterada)
     const compras = await prisma.compras.findMany({
         where: { status: 'em_analise' },
         select: { id_compra: true }
