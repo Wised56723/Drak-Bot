@@ -53,14 +53,17 @@ model Compras {
   quantidade    Int
   status        String   @default("em_analise")
   id_indicador_fk String?
-
-  // --- NOVOS CAMPOS ADICIONADOS ---
-  // Armazena a resposta pública de "reserva pendente"
+  
   public_reply_message_id String?
   public_reply_channel_id String?
-  // --- FIM DOS NOVOS CAMPOS ---
 
-  rifa      Rifa      @relation(fields: [id_rifa_fk], references: [id_rifa])
+  // --- ALTERAÇÃO AQUI ---
+  // Adicionamos 'onDelete: Cascade'.
+  // Se uma 'Rifa' for apagada, todas as 'Compras' associadas a ela
+  // serão automaticamente apagadas.
+  rifa      Rifa      @relation(fields: [id_rifa_fk], references: [id_rifa], onDelete: Cascade)
+  // --- FIM DA ALTERAÇÃO ---
+
   usuario   Usuario   @relation(fields: [id_usuario_fk], references: [id_discord])
   bilhetes  Bilhetes[]
   
