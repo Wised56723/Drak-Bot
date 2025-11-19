@@ -7,6 +7,18 @@ export type { Rifa, Usuario } from "@prisma/client";
 import { ExtendedClient } from "../structs/ExtendedClient";
 import { Logger } from "./Logger"; 
 
+// --- Função Auxiliar para Barra de Progresso ---
+function criarBarraProgresso(atual: number, total: number, tamanho: number = 10): string {
+    const porcentagem = Math.min(Math.max(atual / total, 0), 1);
+    const progresso = Math.round(tamanho * porcentagem);
+    const vazio = tamanho - progresso;
+    
+    const charCheio = "█";
+    const charVazio = "░"; // Ou use '—' se preferir algo mais limpo
+    
+    return charCheio.repeat(progresso) + charVazio.repeat(vazio);
+}
+
 // --- Interfaces ---
 export interface Vencedor {
     id_discord: string;
@@ -205,8 +217,9 @@ export async function buildRaffleEmbed(rifa: Rifa, vendidos: number) {
     embedMain.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
     embedMain.setDescription(`Participe da rifa e concorra a **${rifa.nome_premio}**!`);
     embedMain.setColor("Blue");
+    const barra = criarBarraProgresso(vendidos, rifa.total_bilhetes); // Gera a barra
     embedMain.addFields(
-        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
+        { name: "🎟️ Progresso", value: `\`${barra}\` **${progresso.toFixed(1)}%**`, inline: false },
         { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
         { name: "Mecânica", value: metodo, inline: true },
         { name: "Status", value: rifa.status.toUpperCase(), inline: true }
@@ -251,9 +264,11 @@ export async function buildRaffleAwaitingDrawEmbed(rifa: Rifa, sorteioDateISO: s
     embedMain.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
     embedMain.setDescription(`**META ATINGIDA!** O sorteio foi agendado!`);
     embedMain.setColor("Blue"); // Pode mudar para Aqua ou outra cor de destaque
+    const barra = criarBarraProgresso(vendidos, rifa.total_bilhetes);
+
     embedMain.addFields(
         { name: "📅 Data do Sorteio (Loteria Federal)", value: `**${dataSorteio}**`, inline: false },
-        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
+        { name: "🎟️ Progresso", value: `\`${barra}\` **${progresso.toFixed(1)}%**`, inline: false },
         { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
         { name: "Status", value: "AGUARDANDO SORTEIO", inline: true }
     );
