@@ -5,9 +5,9 @@ import { prisma } from "../prismaClient";
 import type { Rifa, Usuario } from "@prisma/client";
 export type { Rifa, Usuario } from "@prisma/client";
 import { ExtendedClient } from "../structs/ExtendedClient";
-import { Logger } from "./Logger"; // Importa o Logger
+import { Logger } from "./Logger"; 
 
-// --- CORREÇÃO: Definições de tipo/interface adicionadas ---
+// --- Interfaces ---
 export interface Vencedor {
     id_discord: string;
     nome: string;
@@ -19,14 +19,13 @@ interface TopBuyer {
     total_comprado: number;
 }
 export type Premios = Record<string, string>;
-// --- FIM DA CORREÇÃO ---
 
+// --- Funções Auxiliares de Dados ---
 
 /**
  * Busca o ranking de top compradores (IGNORA BILHETES GRÁTIS)
  */
 async function getTopBuyers(rifaId: number, limit: number): Promise<TopBuyer[]> {
-    
     const comprasAgregadas = await prisma.compras.groupBy({
         by: ['id_usuario_fk'],
         where: {
@@ -77,71 +76,6 @@ export async function countBilhetesReservados(rifaId: number): Promise<number> {
 }
 
 /**
- * Constrói o texto do campo do ranking
- */
-async function buildTopBuyersField(rifa: Rifa): Promise<string> {
-    if (rifa.top_compradores_count === 0 || !rifa.top_compradores_premios) {
-        return "";
-    }
-    
-    const ranking = await getTopBuyers(rifa.id_rifa, rifa.top_compradores_count);
-    const premios: Premios = JSON.parse(rifa.top_compradores_premios || "{}");
-    if (ranking.length === 0) return "Ainda não há compradores no ranking.";
-
-    const icons = ["🥇", "🥈", "🥉"];
-    let text = "";
-    ranking.forEach((buyer, index) => {
-        const pos = index + 1;
-        const icon = icons[index] || "🏅";
-        const premioDesc = premios[pos] || "Prémio";
-        text += `**${pos}. ${icon} ${buyer.nome} (${buyer.total_comprado} bilhetes)**\n`
-              + `> *Prémio: ${premioDesc}*\n`;
-    });
-    return text;
-}
-
-
-/**
- * Gera o Embed de status da Rifa
- */
-export async function buildRaffleEmbed(rifa: Rifa, vendidos: number) {
-    const embed = new EmbedBuilder();
-    const progresso = (vendidos / rifa.total_bilhetes) * 100;
-    const metodo = rifa.metodo_sorteio === 'drak' ? 'Sorteio pelo Drak Bot' : 'Sorteio pela Loteria Federal';
-    const preco = rifa.preco_bilhete;
-    embed.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
-    embed.setDescription(`Participe da rifa e concorra a **${rifa.nome_premio}**!`);
-    embed.setColor("Gold");
-    embed.addFields(
-        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
-        { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
-        { name: "Mecânica", value: metodo, inline: true },
-        { name: "Status", value: rifa.status.toUpperCase(), inline: true }
-    );
-    if (rifa.metodo_sorteio === 'loteria' && rifa.meta_completude) {
-        embed.addFields({ name: "Meta para Sorteio", value: `Atingir ${(rifa.meta_completude * 100)}% de vendas.`, inline: true });
-    }
-    if (rifa.top_compradores_count > 0) {
-        const rankingText = await buildTopBuyersField(rifa);
-        if (rankingText) {
-            embed.addFields({ name: "🏆 Top Compradores", value: rankingText, inline: false });
-        }
-    }
-    embed.setFooter({ text: "Clique no botão abaixo para comprar." });
-    embed.setTimestamp();
-
-    const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(`buy-ticket_${rifa.id_rifa}`)
-                .setLabel("🎟️ Comprar Bilhete")
-                .setStyle(ButtonStyle.Success)
-        );
-
-    return { embeds: [embed], components: [row] };
-}
-
-/**
  * Busca uma rifa no DB pelo ID
  */
 export async function getRifaById(id: number): Promise<Rifa | null> {
@@ -164,40 +98,6 @@ export async function countBilhetesVendidos(rifaId: number): Promise<number> {
      });
 }
 
-
-/**
- * Atualiza a mensagem pública de uma rifa
- */
-export async function updateRaffleMessage(client: ExtendedClient, rifaId: number) {
-    try {
-        const rifa = await getRifaById(rifaId);
-        if (!rifa || !rifa.channel_id || !rifa.message_id) return;
-        
-        const channel = await client.channels.fetch(rifa.channel_id) as TextChannel;
-        if (!channel) return;
-        
-        const message = await channel.messages.fetch(rifa.message_id);
-        if (!message) return;
-
-        const vendidos = await countBilhetesVendidos(rifa.id_rifa);
-        
-        let messageData: { embeds: EmbedBuilder[], components: ActionRowBuilder<ButtonBuilder>[] };
-        
-        if (rifa.status === 'aguardando_sorteio' && rifa.sorteio_data) {
-            messageData = await buildRaffleAwaitingDrawEmbed(rifa, rifa.sorteio_data.toISOString(), vendidos);
-        } else {
-            messageData = await buildRaffleEmbed(rifa, vendidos);
-        }
-        
-        await message.edit(messageData);
-        
-        Logger.info("Desconhecido", `[UPDATE]: Mensagem da Rifa #${rifaId} (e Ranking) atualizada.`);
-
-    } catch (error) {
-        Logger.error("Desconhecido", `[ERRO UPDATE]: Falha ao atualizar mensagem da Rifa #${rifaId}`, error);
-    }
-}
-
 /**
  * Busca uma lista de IDs de todos os participantes (sem duplicatas)
  */
@@ -215,32 +115,200 @@ export async function getAllParticipants(rifaId: number): Promise<string[]> {
     return users.map(u => u.id_usuario_fk);
 }
 
+// --- Funções Construtoras de Embeds Específicos ---
+
 /**
- * Gera o Embed de Vencedor
+ * Constrói o Embed de Ranking (Top Compradores) - Separado e Chamativo
+ */
+async function buildRankingEmbed(rifa: Rifa): Promise<EmbedBuilder | null> {
+    if (rifa.top_compradores_count === 0 || !rifa.top_compradores_premios) {
+        return null;
+    }
+    
+    const ranking = await getTopBuyers(rifa.id_rifa, rifa.top_compradores_count);
+    const premios: Premios = JSON.parse(rifa.top_compradores_premios || "{}");
+    
+    const embed = new EmbedBuilder()
+        .setTitle("🏆 Ranking de Compradores")
+        .setColor(0xFFD700) // Dourado
+        .setThumbnail("https://cdn-icons-png.flaticon.com/512/3112/3112946.png"); // Ícone de troféu genérico opcional
+
+    if (ranking.length === 0) {
+        embed.setDescription("Seja o primeiro a aparecer no ranking!");
+        return embed;
+    }
+
+    const icons = ["🥇", "🥈", "🥉"];
+    let text = "";
+    ranking.forEach((buyer, index) => {
+        const pos = index + 1;
+        const icon = icons[index] || "🏅";
+        const premioDesc = premios[pos] || "Prémio";
+        text += `**${pos}º ${icon} ${buyer.nome}**\n`
+              + `> 🎟️ Bilhetes: ${buyer.total_comprado}\n`
+              + `> 🎁 Prémio: *${premioDesc}*\n\n`;
+    });
+    
+    embed.setDescription(text);
+    return embed;
+}
+
+/**
+ * Constrói o Embed de Prémios Instantâneos / Bilhetes Premiados
+ */
+async function buildPrizesEmbed(rifa: Rifa): Promise<EmbedBuilder | null> {
+    const premios = await prisma.premiosInstantaneos.findMany({
+        where: { id_rifa_fk: rifa.id_rifa },
+        include: { usuario: true },
+        orderBy: { numero_bilhete: 'asc' }
+    });
+
+    if (premios.length === 0) {
+        return null;
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle("🎫 Bilhetes Premiados")
+        .setDescription("Achou, ganhou! Confira os bilhetes premiados abaixo:")
+        .setColor("Purple"); 
+
+    // Limite de campos do Discord é 25. Se houver muitos, usamos texto corrido.
+    // Aqui implementamos a lógica pedida: PREMIO: XXXX
+    
+    let desc = "";
+    
+    premios.forEach(premio => {
+        const statusIcon = premio.status === 'reivindicado' ? "✅" : "⏳";
+        const winnerInfo = premio.status === 'reivindicado' && premio.usuario 
+            ? `**GANHADOR:** <@${premio.usuario.id_discord}> (Bilhete: \`${premio.numero_bilhete}\`)`
+            : `**BILHETE:** \`XXXX\``;
+
+        desc += `${statusIcon} **${premio.descricao_premio}**\n> ${winnerInfo}\n\n`;
+    });
+
+    embed.setDescription(desc);
+    return embed;
+}
+
+// --- Funções de Montagem Final (Main + Ranking + Prizes) ---
+
+/**
+ * Gera os Embeds de status da Rifa (Ativa)
+ */
+export async function buildRaffleEmbed(rifa: Rifa, vendidos: number) {
+    // 1. Embed Principal
+    const embedMain = new EmbedBuilder();
+    const progresso = (vendidos / rifa.total_bilhetes) * 100;
+    const metodo = rifa.metodo_sorteio === 'drak' ? 'Sorteio pelo Drak Bot' : 'Sorteio pela Loteria Federal';
+    const preco = rifa.preco_bilhete;
+    
+    embedMain.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
+    embedMain.setDescription(`Participe da rifa e concorra a **${rifa.nome_premio}**!`);
+    embedMain.setColor("Blue");
+    embedMain.addFields(
+        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
+        { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
+        { name: "Mecânica", value: metodo, inline: true },
+        { name: "Status", value: rifa.status.toUpperCase(), inline: true }
+    );
+
+    if (rifa.metodo_sorteio === 'loteria' && rifa.meta_completude) {
+        embedMain.addFields({ name: "Meta para Sorteio", value: `Atingir ${(rifa.meta_completude * 100)}% de vendas.`, inline: true });
+    }
+    
+    embedMain.setFooter({ text: "Clique no botão abaixo para comprar." });
+    embedMain.setTimestamp();
+
+    // 2. Embeds Auxiliares
+    const embedRanking = await buildRankingEmbed(rifa);
+    const embedPrizes = await buildPrizesEmbed(rifa);
+
+    const embeds = [embedMain];
+    if (embedRanking) embeds.push(embedRanking);
+    if (embedPrizes) embeds.push(embedPrizes);
+
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`buy-ticket_${rifa.id_rifa}`)
+                .setLabel("🎟️ Comprar Bilhete")
+                .setStyle(ButtonStyle.Success)
+        );
+
+    return { embeds: embeds, components: [row] };
+}
+
+/**
+ * Gera os Embeds para "Aguardando Sorteio"
+ */
+export async function buildRaffleAwaitingDrawEmbed(rifa: Rifa, sorteioDateISO: string, vendidos: number) {
+    // 1. Embed Principal
+    const embedMain = new EmbedBuilder();
+    const progresso = (vendidos / rifa.total_bilhetes) * 100;
+    const preco = rifa.preco_bilhete;
+    const dataSorteio = new Date(sorteioDateISO).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' });
+    
+    embedMain.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
+    embedMain.setDescription(`**META ATINGIDA!** O sorteio foi agendado!`);
+    embedMain.setColor("Blue"); // Pode mudar para Aqua ou outra cor de destaque
+    embedMain.addFields(
+        { name: "📅 Data do Sorteio (Loteria Federal)", value: `**${dataSorteio}**`, inline: false },
+        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
+        { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
+        { name: "Status", value: "AGUARDANDO SORTEIO", inline: true }
+    );
+    embedMain.setFooter({ text: "Boa sorte! As vendas continuam abertas." });
+    embedMain.setTimestamp();
+
+    // 2. Embeds Auxiliares
+    const embedRanking = await buildRankingEmbed(rifa);
+    const embedPrizes = await buildPrizesEmbed(rifa);
+
+    const embeds = [embedMain];
+    if (embedRanking) embeds.push(embedRanking);
+    if (embedPrizes) embeds.push(embedPrizes);
+
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`buy-ticket_${rifa.id_rifa}`)
+                .setLabel("🎟️ Comprar Bilhete")
+                .setStyle(ButtonStyle.Success)
+        );
+
+    return { embeds: embeds, components: [row] };
+}
+
+/**
+ * Gera os Embeds de Vencedor (Finalizada)
  */
 export async function buildRaffleWinnerEmbed(rifa: Rifa, vencedor: Vencedor) {
-    const embed = new EmbedBuilder();
-    embed.setTitle(`🎉 Sorteio Finalizado! Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
-    embed.setDescription(`Temos um vencedor para a rifa **${rifa.nome_premio}**!`);
-    embed.setColor("Green");
-    embed.addFields(
+    // 1. Embed Principal
+    const embedMain = new EmbedBuilder();
+    embedMain.setTitle(`🎉 Sorteio Finalizado! Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
+    embedMain.setDescription(`Temos um vencedor para a rifa **${rifa.nome_premio}**!`);
+    embedMain.setColor("Green");
+    embedMain.addFields(
         { name: "🏆 Vencedor", value: `**${vencedor.nome}** (<@${vencedor.id_discord}>)`, inline: false },
         { name: "Número Sorteado", value: `\`\`\`${vencedor.numero_bilhete}\`\`\``, inline: true },
         { name: "Status", value: "FINALIZADA", inline: true }
     );
-    if (rifa.top_compradores_count > 0) {
-        const rankingText = await buildTopBuyersField(rifa);
-        if (rankingText) {
-            embed.addFields({ name: "🏆 Ranking Final Top Compradores", value: rankingText, inline: false });
-        }
-    }
-    embed.setFooter({ text: "Obrigado a todos que participaram!" });
-    embed.setTimestamp();
-    return { embeds: [embed], components: [] };
+    embedMain.setFooter({ text: "Obrigado a todos que participaram!" });
+    embedMain.setTimestamp();
+
+    // 2. Embeds Auxiliares
+    const embedRanking = await buildRankingEmbed(rifa);
+    const embedPrizes = await buildPrizesEmbed(rifa);
+
+    const embeds = [embedMain];
+    if (embedRanking) embeds.push(embedRanking);
+    if (embedPrizes) embeds.push(embedPrizes);
+
+    return { embeds: embeds, components: [] };
 }
 
 /**
- * Gera o Embed de Rifa Cancelada
+ * Gera o Embed de Rifa Cancelada (Geralmente apenas um embed é suficiente aqui)
  */
 export function buildRaffleCancelledEmbed(rifa: Rifa, motivo: string) {
     const embed = new EmbedBuilder();
@@ -257,38 +325,35 @@ export function buildRaffleCancelledEmbed(rifa: Rifa, motivo: string) {
 }
 
 /**
- * Gera o Embed de "Aguardando Sorteio"
+ * Atualiza a mensagem pública de uma rifa
  */
-export async function buildRaffleAwaitingDrawEmbed(rifa: Rifa, sorteioDateISO: string, vendidos: number) {
-    const embed = new EmbedBuilder();
-    const progresso = (vendidos / rifa.total_bilhetes) * 100;
-    const preco = rifa.preco_bilhete;
-    const dataSorteio = new Date(sorteioDateISO).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' });
-    embed.setTitle(`Rifa #${rifa.id_rifa}: ${rifa.nome_premio}`);
-    embed.setDescription(`**META ATINGIDA!** O sorteio foi agendado!`);
-    embed.setColor("Blue");
-    embed.addFields(
-        { name: "📅 Data do Sorteio (Loteria Federal)", value: `**${dataSorteio}**`, inline: false },
-        { name: "🎟️ Progresso", value: `**${vendidos} / ${rifa.total_bilhetes}** (${progresso.toFixed(1)}%)`, inline: false },
-        { name: "💰 Preço por Bilhete", value: preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), inline: true },
-        { name: "Status", value: "AGUARDANDO SORTEIO", inline: true }
-    );
-    if (rifa.top_compradores_count > 0) {
-        const rankingText = await buildTopBuyersField(rifa);
-        if (rankingText) {
-            embed.addFields({ name: "🏆 Top Compradores", value: rankingText, inline: false });
+export async function updateRaffleMessage(client: ExtendedClient, rifaId: number) {
+    try {
+        const rifa = await getRifaById(rifaId);
+        if (!rifa || !rifa.channel_id || !rifa.message_id) return;
+        
+        const channel = await client.channels.fetch(rifa.channel_id) as TextChannel;
+        if (!channel) return;
+        
+        const message = await channel.messages.fetch(rifa.message_id);
+        if (!message) return;
+
+        const vendidos = await countBilhetesVendidos(rifa.id_rifa);
+        
+        // Aqui o tipo de retorno já é compatível com message.edit
+        let messageData;
+        
+        if (rifa.status === 'aguardando_sorteio' && rifa.sorteio_data) {
+            messageData = await buildRaffleAwaitingDrawEmbed(rifa, rifa.sorteio_data.toISOString(), vendidos);
+        } else {
+            messageData = await buildRaffleEmbed(rifa, vendidos);
         }
+        
+        await message.edit(messageData);
+        
+        Logger.info("Desconhecido", `[UPDATE]: Mensagem da Rifa #${rifaId} (Multi-Embeds) atualizada.`);
+
+    } catch (error) {
+        Logger.error("Desconhecido", `[ERRO UPDATE]: Falha ao atualizar mensagem da Rifa #${rifaId}`, error);
     }
-    embed.setFooter({ text: "Boa sorte! As vendas continuam abertas." });
-    embed.setTimestamp();
-
-    const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(`buy-ticket_${rifa.id_rifa}`)
-                .setLabel("🎟️ Comprar Bilhete")
-                .setStyle(ButtonStyle.Success)
-        );
-
-    return { embeds: [embed], components: [row] };
 }
