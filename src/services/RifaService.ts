@@ -5,7 +5,7 @@ import {
   TextChannel,
   EmbedBuilder,
   ActionRowBuilder,
-  ButtonBuilder, // Corrigido (importação já estava correta)
+  ButtonBuilder, 
   ButtonStyle,
   ChatInputCommandInteraction,
   DMChannel 
@@ -28,7 +28,6 @@ import { PIX } from "gpix/dist";
 
 const CONTEXT: LogContext = "RifaService";
 
-// ... (Funções shuffleInPlace, formatTicketNumber, criarRifa - SEM ALTERAÇÕES) ...
 function shuffleInPlace<T>(arr: T[]): void {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -38,6 +37,13 @@ function shuffleInPlace<T>(arr: T[]): void {
 function formatTicketNumber(num: number, padding: number): string {
   return String(num).padStart(padding, "0");
 }
+
+function getLotteryWinnerNumber(totalBilhetes: number, numeroSorteado: string): string {
+  const requiredLength = String(totalBilhetes - 1).length;
+  const winnerNumber = numeroSorteado.slice(-requiredLength);
+  return winnerNumber.padStart(requiredLength, "0");
+}
+
 export async function criarRifa(interaction: ModalSubmitInteraction, client: ExtendedClient) {
     if (!interaction.inGuild()) return;
     await interaction.deferReply({ ephemeral: true });
@@ -280,35 +286,20 @@ export async function processarCompraRifa(interaction: ModalSubmitInteraction, c
             .setColor("Blue")
             .setFooter({ text: "Após o pagamento, um admin irá aprovar sua compra." });
 
-// ... (dentro de processarCompraRifa, após criar o dmEmbed) ...
-
         try {
             const userDM = await interaction.user.createDM();
             
-            // --- ALTERAÇÃO AQUI ---
-            // 1. Guardamos a mensagem do EMBED (o cartão com o PIX) numa variável
+            // --- ALTERAÇÃO: Guardamos a mensagem do EMBED e removemos a msg de texto extra ---
             const msgComEmbed = await userDM.send({ embeds: [dmEmbed] });
-
-            const trackerMessageContent = 
-                `✅ **Sucesso!** Sua reserva foi registrada (ID: \`${newCompraId}\`).\n` +
-                `Enviei os detalhes do pagamento e o Pix Copia e Cola para a sua DM.\n\n` +
-                `*(Esta mensagem desaparecerá automaticamente assim que sua compra for aprovada por um admin.)*`;
-
-            // 2. Enviamos a mensagem de texto de aviso (opcional, mas mantemos para feedback imediato)
-            // Não precisamos guardar o ID desta, pois o foco é editar o Embed.
-            await userDM.send(trackerMessageContent);
             
-            // 3. IMPORTANTE: Guardamos o ID da mensagem do EMBED para editar depois
+            // Guardamos o ID da mensagem do EMBED (o cartão azul) para editar depois
             dmMessageId = msgComEmbed.id;
             dmChannelId = userDM.id;
-            // --- FIM DA ALTERAÇÃO ---
 
         } catch (dmError) {
             Logger.error(CONTEXT, `Erro ao enviar DM de compra para ${id_discord}`, dmError);
             return interaction.editReply("Falha ao enviar a DM com o Pix. Verifique se suas DMs estão abertas.");
         }
-
-// ... (o resto do código continua igual) ...
 
         try {
             const logChannelId = process.env.LOG_CHANNEL_ID;
@@ -327,9 +318,7 @@ export async function processarCompraRifa(interaction: ModalSubmitInteraction, c
                     .setTimestamp();
                 const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder().setCustomId(`log-approve_${newCompraId}`).setLabel("Aprovar").setStyle(ButtonStyle.Success).setEmoji("✅"),
-                    // --- CORREÇÃO DO ERRO 1 AQUI ---
                     new ButtonBuilder().setCustomId(`log-reject_${newCompraId}`).setLabel("Rejeitar").setStyle(ButtonStyle.Danger).setEmoji("❌")
-                    // --- FIM DA CORREÇÃO ---
                 );
                 await logChannel.send({ content: `Ação necessária para a Compra #${newCompraId}:`, embeds: [logEmbed], components: [actionRow] });
             }
@@ -363,11 +352,6 @@ export async function processarCompraRifa(interaction: ModalSubmitInteraction, c
     }
 }
 
-
-/**
- * sortearRifaDrak
- * Refatorado para enviar DM ao vencedor, sem apagar a rifa.
- */
 export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -411,14 +395,12 @@ export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, i
       nome: chosen.compra.usuario.nome
     };
 
-    // Atualiza o status da rifa (NÃO A APAGA)
     await prisma.rifa.update({
       where: { id_rifa: id_rifa },
       data: { status: "finalizada", sorteio_data: new Date() }
     });
     rifa.status = "finalizada";
 
-    // Atualiza a mensagem pública (sem alterações)
     if (rifa.channel_id && rifa.message_id) {
       try {
         const channel = (await client.channels.fetch(rifa.channel_id)) as TextChannel;
@@ -430,7 +412,6 @@ export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, i
       }
     }
     
-    // --- NOVA LÓGICA: Enviar DM ao Vencedor ---
     try {
         const user = await client.users.fetch(vencedor.id_discord);
         const dmEmbed = new EmbedBuilder()
@@ -445,7 +426,6 @@ export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, i
     } catch (dmError) {
         Logger.error(CONTEXT, `Falha ao enviar DM de vencedor para ${vencedor.id_discord} (Rifa #${id_rifa})`, dmError);
     }
-    // --- FIM DA NOVA LÓGICA ---
 
     Logger.info(CONTEXT, `Rifa #${id_rifa} sorteada (drak). Vencedor: ${vencedor.nome}`);
     await interaction.editReply(`🎉 Sorteio Realizado com Sucesso! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);
@@ -456,10 +436,6 @@ export async function sortearRifaDrak(id_rifa: number, client: ExtendedClient, i
   }
 }
 
-/**
- * cancelarRifa
- * Refatorado para enviar DMs de reembolso, sem apagar a rifa.
- */
 export async function cancelarRifa(id_rifa: number, motivo: string, client: ExtendedClient, interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -469,7 +445,6 @@ export async function cancelarRifa(id_rifa: number, motivo: string, client: Exte
     if (!rifa) throw new Error("Rifa não encontrada.");
     if (rifa.status !== "ativa") throw new Error(`Esta rifa não pode ser cancelada (Status atual: '${rifa.status}').`);
 
-    // --- NOVA LÓGICA: Calcular reembolsos e notificar ---
     const participantes = await prisma.compras.groupBy({
         by: ['id_usuario_fk'],
         where: {
@@ -480,7 +455,7 @@ export async function cancelarRifa(id_rifa: number, motivo: string, client: Exte
             }
         },
         _sum: {
-            quantidade: true // Soma a quantidade de bilhetes pagos
+            quantidade: true
         }
     });
 
@@ -515,7 +490,6 @@ export async function cancelarRifa(id_rifa: number, motivo: string, client: Exte
             Logger.warn(CONTEXT, `Falha ao enviar DM de cancelamento para ${participante.id_usuario_fk} (Rifa #${id_rifa})`, dmError);
         }
     }
-    // --- FIM DA NOVA LÓGICA ---
 
     await prisma.rifa.update({
       where: { id_rifa: id_rifa },
@@ -546,20 +520,6 @@ export async function cancelarRifa(id_rifa: number, motivo: string, client: Exte
   }
 }
 
-// --- CORREÇÃO DO ERRO 2 AQUI ---
-// Função re-adicionada
-function getLotteryWinnerNumber(totalBilhetes: number, numeroSorteado: string): string {
-  const requiredLength = String(totalBilhetes - 1).length;
-  const winnerNumber = numeroSorteado.slice(-requiredLength);
-  return winnerNumber.padStart(requiredLength, "0");
-}
-// --- FIM DA CORREÇÃO ---
-
-
-/**
- * finalizarRifaLoteria
- * Refatorado para enviar DM ao vencedor, sem apagar a rifa.
- */
 export async function finalizarRifaLoteria(
   id_rifa: number,
   numero_sorteado_input: string,
@@ -591,7 +551,6 @@ export async function finalizarRifaLoteria(
       }
     });
 
-    // Caso não haja vencedor
     if (!bilheteVencedor || !bilheteVencedor.compra || !bilheteVencedor.compra.usuario) {
       await prisma.rifa.update({
         where: { id_rifa: id_rifa },
@@ -602,7 +561,6 @@ export async function finalizarRifaLoteria(
       return;
     }
 
-    // Caso haja vencedor
     const vencedor: Vencedor = {
       numero_bilhete: bilheteVencedor.numero_bilhete,
       id_discord: bilheteVencedor.compra.usuario.id_discord,
@@ -626,7 +584,6 @@ export async function finalizarRifaLoteria(
       }
     }
 
-    // --- NOVA LÓGICA: Enviar DM ao Vencedor ---
     try {
         const user = await client.users.fetch(vencedor.id_discord);
         const dmEmbed = new EmbedBuilder()
@@ -643,7 +600,6 @@ export async function finalizarRifaLoteria(
     } catch (dmError) {
         Logger.error(CONTEXT, `Falha ao enviar DM de vencedor para ${vencedor.id_discord} (Rifa #${id_rifa})`, dmError);
     }
-    // --- FIM DA NOVA LÓGICA ---
 
     Logger.info(CONTEXT, `Rifa #${id_rifa} finalizada (loteria). Vencedor: ${vencedor.nome}`);
     await interaction.editReply(`🎉 Sorteio da Loteria Finalizado! Vencedor: ${vencedor.nome} (<@${vencedor.id_discord}>)`);

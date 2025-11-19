@@ -10,7 +10,7 @@ import { Prisma } from "@prisma/client";
 const CONTEXT: LogContext = "GestaoService"; 
 
 type AprovacaoResult = {
-    novosNumeros: string[]; // Ainda precisamos disto para a resposta do Admin
+    novosNumeros: string[]; // Ainda precisamos disto para a resposta do Admin (internamente), mas não vamos exibir tudo
     premiosGanhos: { numero: string, premio: string }[];
     compra: { 
         id_rifa_fk: number;
@@ -190,14 +190,10 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     // --- Lógica Pós-Transação (DMs e Respostas) ---
 
-// ... (dentro de aprovarCompra, LOGO APÓS o bloco prisma.$transaction) ...
-
-    // --- Lógica Pós-Transação (DMs e Respostas) ---
-
     try {
         const user = await client.users.fetch(compra.id_usuario_fk);
 
-        // Criação do Embed de Aprovação (Verde)
+        // --- ATUALIZAÇÃO DA DM: EMBED VERDE DE SUCESSO ---
         const dmEmbed = new EmbedBuilder()
             .setTitle(`✅ Compra Aprovada (Rifa #${compra.id_rifa_fk})`)
             .setDescription(`Sua compra de **${compra.quantidade} bilhete(s)** foi aprovada!`)
@@ -205,8 +201,7 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
                 name: "Consulta de Bilhetes", 
                 value: `Para ver o total de bilhetes que você possui, use o comando \`/meus-bilhetes\` aqui na minha DM.` 
             })
-            .setColor("Green")
-            .setTimestamp();
+            .setColor("Green").setTimestamp();
         
         if (premiosGanhos.length > 0) {
             dmEmbed.addFields({
@@ -216,41 +211,37 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             dmEmbed.setColor("Gold");
         }
 
-        // --- ALTERAÇÃO PRINCIPAL AQUI ---
+        // --- LÓGICA DE EDIÇÃO (TRANSIÇÃO MÁGICA) ---
         let mensagemEditada = false;
 
-        // 1. Tentar editar a mensagem antiga "Reserva de Bilhetes"
+        // Verificamos se temos o ID da mensagem original (O Cartão Azul)
         if (compra.public_reply_channel_id && compra.public_reply_message_id) {
             try {
                 const channel = await client.channels.fetch(compra.public_reply_channel_id);
-                if (channel && (channel.isTextBased() || channel.isThread())) {
+                if (channel && (channel.isTextBased() || channel.isThread())) { 
                     const message = await channel.messages.fetch(compra.public_reply_message_id);
                     if (message) {
-                        // A MÁGICA ACONTECE AQUI: Editamos a mensagem antiga!
+                        // Aqui acontece a mágica: Editamos o Embed anterior para o novo Verde
                         await message.edit({ embeds: [dmEmbed] });
                         mensagemEditada = true;
-                        Logger.info(CONTEXT, `Mensagem de reserva ${message.id} transformada em Aprovação.`);
+                        Logger.info(CONTEXT, `Mensagem de reserva ${message.id} atualizada para Aprovada.`);
                     }
                 }
             } catch (editError) {
-                Logger.warn(CONTEXT, `Não foi possível editar a msg original (pode ter sido apagada). Enviando nova.`, editError);
+                Logger.warn(CONTEXT, `Falha ao editar mensagem original de reserva (pode ter sido deletada). Enviando nova.`, editError);
             }
         }
 
-        // 2. Se não conseguiu editar (ex: msg apagada), envia uma nova mensagem normal
+        // Se não conseguimos editar (por erro ou msg apagada), enviamos uma nova
         if (!mensagemEditada) {
             await user.send({ embeds: [dmEmbed] });
         }
-        // --- FIM DA ALTERAÇÃO ---
 
     } catch (dmError) { 
-        Logger.error(CONTEXT, `Erro ao enviar/editar DM (aprovar) para ${compra.id_usuario_fk}`, dmError);
+        Logger.error(CONTEXT, `Erro ao enviar DM (aprovar) para ${compra.id_usuario_fk}`, dmError);
     }
     
-    // ... (o código continua para a lógica de bónus e atualização da mensagem pública) ...
-    
     if (bonusMessage && compra.id_indicador_fk) {
-        // ... (lógica de DM de bônus - sem alterações) ...
         try {
             const indicadorUser = await client.users.fetch(compra.id_indicador_fk);
             const convidado = await client.users.fetch(compra.id_usuario_fk);
@@ -266,24 +257,10 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     await updateRaffleMessage(client, compra.id_rifa_fk);
 
-    if (compra.public_reply_message_id && compra.public_reply_channel_id) {
-        // ... (lógica de apagar a mensagem de reserva na DM - sem alterações) ...
-        try {
-            const channel = await client.channels.fetch(compra.public_reply_channel_id);
-            if (channel && (channel.isTextBased() || channel.isThread())) { 
-                const message = await channel.messages.fetch(compra.public_reply_message_id);
-                if (message) {
-                    await message.delete();
-                    Logger.info(CONTEXT, `Mensagem de reserva pública ${message.id} deletada com sucesso.`);
-                }
-            }
-        } catch (deleteError) {
-            Logger.warn(CONTEXT, `Falha ao deletar mensagem de reserva pública ${compra.public_reply_message_id} (Pode já ter sido deletada).`, deleteError);
-        }
-    }
-
-    // A resposta do Admin (que vê os números) permanece igual
-        let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>, ${novosNumeros.join(', ')})`;
+    // --- CORREÇÃO DO LOG DE ADMIN ---
+    // Removemos a lista gigante de números e deixamos apenas a quantidade
+    let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>)\n**Quantidade:** ${compra.quantidade} bilhete(s)`;
+    
     if (premiosGanhos.length > 0) {
         const premioTxt = premiosGanhos.map((p: { numero: string, premio: string }) => `Bilhete \`${p.numero}\` ganhou **${p.premio}**`).join(', ');
         respostaAdmin += `\n**BINGO! <@${compra.id_usuario_fk}> ganhou:** ${premioTxt}`;
@@ -300,7 +277,6 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
  * Lógica de negócio para rejeitar uma compra.
  */
 export async function rejeitarCompra(id_compra: number, motivo: string, client: ExtendedClient): Promise<string> {
-    // (Esta função não foi alterada)
     Logger.info(CONTEXT, `Iniciando rejeição da compra #${id_compra}...`);
     
     const compra = await prisma.compras.findUnique({
@@ -324,35 +300,42 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
         data: { status: 'rejeitada' }
     });
 
+    // Embed Vermelho de Rejeição
+    const dmEmbed = new EmbedBuilder()
+        .setTitle(`❌ Compra Rejeitada (Rifa #${compra.id_rifa_fk})`)
+        .setDescription(`Sua compra (ID: \`${id_compra}\`) de **${compra.quantidade} bilhete(s)** foi rejeitada.`)
+        .addFields({ name: "Motivo da Rejeição", value: motivo })
+        .setColor("Red")
+        .setTimestamp();
+
+    let mensagemEditada = false;
+
     try {
-        const user = await client.users.fetch(compra.id_usuario_fk);
-        const dmEmbed = new EmbedBuilder()
-            .setTitle(`❌ Compra Rejeitada (Rifa #${compra.id_rifa_fk})`)
-            .setDescription(`Sua compra (ID: \`${id_compra}\`) de **${compra.quantidade} bilhete(s)** foi rejeitada.`)
-            .addFields({ name: "Motivo da Rejeição", value: motivo })
-            .setColor("Red")
-            .setTimestamp();
-        await user.send({ embeds: [dmEmbed] });
+        // Tentativa de edição da mensagem original (Cartão Azul -> Cartão Vermelho)
+        if (compra.public_reply_message_id && compra.public_reply_channel_id) {
+             try {
+                const channel = await client.channels.fetch(compra.public_reply_channel_id);
+                if (channel && (channel.isTextBased() || channel.isThread())) { 
+                    const message = await channel.messages.fetch(compra.public_reply_message_id);
+                    if (message) {
+                        // Editamos o Embed para vermelho
+                        await message.edit({ embeds: [dmEmbed] });
+                        mensagemEditada = true;
+                    }
+                }
+            } catch (editError) {
+                Logger.warn(CONTEXT, `Falha ao editar msg pública para Rejeitada (ID: ${compra.public_reply_message_id})`, editError);
+            }
+        }
+
+        // Fallback: Envia nova mensagem se não conseguiu editar
+        if (!mensagemEditada) {
+            const user = await client.users.fetch(compra.id_usuario_fk);
+            await user.send({ embeds: [dmEmbed] });
+        }
+
     } catch (dmError) {
         Logger.error(CONTEXT, `Erro ao enviar DM (rejeitar) para ${compra.id_usuario_fk}`, dmError);
-    }
-    
-    if (compra.public_reply_message_id && compra.public_reply_channel_id) {
-         try {
-            const channel = await client.channels.fetch(compra.public_reply_channel_id);
-            if (channel && (channel.isTextBased() || channel.isThread())) { 
-                const message = await channel.messages.fetch(compra.public_reply_message_id);
-                if (message) {
-                    await message.edit(
-                        `❌ **Sua reserva (ID: \`${compra.id_compra}\`) foi REJEITADA.**\n` +
-                        `*Motivo: ${motivo}*\n` +
-                        `*(Esta mensagem pode ser dispensada.)*`
-                    );
-                }
-            }
-        } catch (editError) {
-            Logger.warn(CONTEXT, `Falha ao editar msg pública para Rejeitada (ID: ${compra.public_reply_message_id})`, editError);
-        }
     }
 
     Logger.info(CONTEXT, `Compra #${id_compra} rejeitada.`);
@@ -363,7 +346,6 @@ export async function rejeitarCompra(id_compra: number, motivo: string, client: 
  * Busca todos os IDs pendentes
  */
 export async function getPendingCompraIds(): Promise<number[]> {
-    // (Esta função não foi alterada)
     const compras = await prisma.compras.findMany({
         where: { status: 'em_analise' },
         select: { id_compra: true }
