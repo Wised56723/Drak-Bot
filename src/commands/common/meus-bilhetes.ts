@@ -24,7 +24,7 @@ export default new Command({
             });
         }
 
-        await interaction.deferReply({ ephemeral: false });
+        await interaction.deferReply({ ephemeral: true });
         
         const id_discord = interaction.user.id;
 

@@ -190,22 +190,24 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
 
     // --- Lógica Pós-Transação (DMs e Respostas) ---
 
+// ... (dentro de aprovarCompra, LOGO APÓS o bloco prisma.$transaction) ...
+
+    // --- Lógica Pós-Transação (DMs e Respostas) ---
+
     try {
         const user = await client.users.fetch(compra.id_usuario_fk);
 
-        // --- INÍCIO DA REATORAÇÃO DA DM ---
+        // Criação do Embed de Aprovação (Verde)
         const dmEmbed = new EmbedBuilder()
             .setTitle(`✅ Compra Aprovada (Rifa #${compra.id_rifa_fk})`)
             .setDescription(`Sua compra de **${compra.quantidade} bilhete(s)** foi aprovada!`)
-            // Campo removido: .addFields({ name: "Seus Números da Sorte (Aleatórios)", value: `\`\`\`${novosNumeros.join(', ')}\`\`\`` })
             .addFields({ 
                 name: "Consulta de Bilhetes", 
                 value: `Para ver o total de bilhetes que você possui, use o comando \`/meus-bilhetes\` aqui na minha DM.` 
             })
-            .setColor("Green").setTimestamp();
+            .setColor("Green")
+            .setTimestamp();
         
-        // A lógica de prémio instantâneo continua igual, pois é importante
-        // mostrar o número específico que ganhou.
         if (premiosGanhos.length > 0) {
             dmEmbed.addFields({
                 name: "🎉 BILHETE PREMIADO! 🎉",
@@ -213,12 +215,39 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
             });
             dmEmbed.setColor("Gold");
         }
-        // --- FIM DA REATORAÇÃO DA DM ---
 
-        await user.send({ embeds: [dmEmbed] });
+        // --- ALTERAÇÃO PRINCIPAL AQUI ---
+        let mensagemEditada = false;
+
+        // 1. Tentar editar a mensagem antiga "Reserva de Bilhetes"
+        if (compra.public_reply_channel_id && compra.public_reply_message_id) {
+            try {
+                const channel = await client.channels.fetch(compra.public_reply_channel_id);
+                if (channel && (channel.isTextBased() || channel.isThread())) {
+                    const message = await channel.messages.fetch(compra.public_reply_message_id);
+                    if (message) {
+                        // A MÁGICA ACONTECE AQUI: Editamos a mensagem antiga!
+                        await message.edit({ embeds: [dmEmbed] });
+                        mensagemEditada = true;
+                        Logger.info(CONTEXT, `Mensagem de reserva ${message.id} transformada em Aprovação.`);
+                    }
+                }
+            } catch (editError) {
+                Logger.warn(CONTEXT, `Não foi possível editar a msg original (pode ter sido apagada). Enviando nova.`, editError);
+            }
+        }
+
+        // 2. Se não conseguiu editar (ex: msg apagada), envia uma nova mensagem normal
+        if (!mensagemEditada) {
+            await user.send({ embeds: [dmEmbed] });
+        }
+        // --- FIM DA ALTERAÇÃO ---
+
     } catch (dmError) { 
-        Logger.error(CONTEXT, `Erro ao enviar DM (aprovar) para ${compra.id_usuario_fk}`, dmError);
+        Logger.error(CONTEXT, `Erro ao enviar/editar DM (aprovar) para ${compra.id_usuario_fk}`, dmError);
     }
+    
+    // ... (o código continua para a lógica de bónus e atualização da mensagem pública) ...
     
     if (bonusMessage && compra.id_indicador_fk) {
         // ... (lógica de DM de bônus - sem alterações) ...
@@ -254,7 +283,7 @@ export async function aprovarCompra(id_compra: number, client: ExtendedClient): 
     }
 
     // A resposta do Admin (que vê os números) permanece igual
-    let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>, ${novosNumeros.join(', ')})`;
+        let respostaAdmin = `Aprovada (<@${compra.id_usuario_fk}>, ${novosNumeros.join(', ')})`;
     if (premiosGanhos.length > 0) {
         const premioTxt = premiosGanhos.map((p: { numero: string, premio: string }) => `Bilhete \`${p.numero}\` ganhou **${p.premio}**`).join(', ');
         respostaAdmin += `\n**BINGO! <@${compra.id_usuario_fk}> ganhou:** ${premioTxt}`;

@@ -280,24 +280,35 @@ export async function processarCompraRifa(interaction: ModalSubmitInteraction, c
             .setColor("Blue")
             .setFooter({ text: "Após o pagamento, um admin irá aprovar sua compra." });
 
+// ... (dentro de processarCompraRifa, após criar o dmEmbed) ...
+
         try {
             const userDM = await interaction.user.createDM();
-            await userDM.send({ embeds: [dmEmbed] });
+            
+            // --- ALTERAÇÃO AQUI ---
+            // 1. Guardamos a mensagem do EMBED (o cartão com o PIX) numa variável
+            const msgComEmbed = await userDM.send({ embeds: [dmEmbed] });
 
             const trackerMessageContent = 
                 `✅ **Sucesso!** Sua reserva foi registrada (ID: \`${newCompraId}\`).\n` +
                 `Enviei os detalhes do pagamento e o Pix Copia e Cola para a sua DM.\n\n` +
                 `*(Esta mensagem desaparecerá automaticamente assim que sua compra for aprovada por um admin.)*`;
 
-            const trackerMessage = await userDM.send(trackerMessageContent);
+            // 2. Enviamos a mensagem de texto de aviso (opcional, mas mantemos para feedback imediato)
+            // Não precisamos guardar o ID desta, pois o foco é editar o Embed.
+            await userDM.send(trackerMessageContent);
             
-            dmMessageId = trackerMessage.id;
+            // 3. IMPORTANTE: Guardamos o ID da mensagem do EMBED para editar depois
+            dmMessageId = msgComEmbed.id;
             dmChannelId = userDM.id;
+            // --- FIM DA ALTERAÇÃO ---
 
         } catch (dmError) {
             Logger.error(CONTEXT, `Erro ao enviar DM de compra para ${id_discord}`, dmError);
             return interaction.editReply("Falha ao enviar a DM com o Pix. Verifique se suas DMs estão abertas.");
         }
+
+// ... (o resto do código continua igual) ...
 
         try {
             const logChannelId = process.env.LOG_CHANNEL_ID;
